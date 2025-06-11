@@ -457,5 +457,6 @@ if __name__ == '__main__':
     # Create reports directory
     os.makedirs('reports', exist_ok=True)
     
-    # Run the Flask app
-    app.run(host='0.0.0.0', port=int(os.getenv('PORT', 5000)), debug=False)
+    # Run the Flask app - Render will provide the PORT environment variable
+    port = int(os.getenv('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=False)
