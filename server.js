@@ -210,6 +210,34 @@ async function handleQuickReplyPayload(senderId, payload) {
       await sendMainMenu(senderId);
       break;
       
+    // NEW HANDLERS
+    case 'ADD_ITEM_TO_INVENTORY':
+      await handleAddItemToInventory(senderId);
+      break;
+      
+    case 'ADD_STOCK_TO_ITEM':
+      await handleAddStockToItem(senderId);
+      break;
+      
+    case 'CHANGE_ITEM_PRICE':
+      await handleChangeItemPrice(senderId);
+      break;
+      
+    case 'ITEM_SOLD':
+      await handleItemSold(senderId);
+      break;
+      
+    case 'READ_RECEIPT':
+      await handleReadReceipt(senderId);
+      break;
+      
+    case 'SUMMARY':
+      const summary = await queryModule.generateBusinessSummary(senderId);
+      await messengerModule.sendTextMessage(senderId, summary);
+      await sendMainMenu(senderId);
+      break;
+      
+    // LEGACY HANDLERS (kept for backward compatibility)
     case 'NEW_ITEM':
       await messengerModule.sendTextMessage(senderId, 
         '📦 Magdagdag ng Bagong Item\n\nI-type ang pangalan ng produkto at presyo:\nHalimbawa: "Coca-Cola 15"');
@@ -237,12 +265,6 @@ async function handleQuickReplyPayload(senderId, payload) {
       await showDailySales(senderId);
       break;
       
-    case 'SUMMARY':
-      const summary = await queryModule.generateBusinessSummary(senderId);
-      await messengerModule.sendTextMessage(senderId, summary);
-      await sendMainMenu(senderId);
-      break;
-      
     case 'HISTORY':
       const history = await queryModule.getUserHistory(senderId);
       await messengerModule.sendTextMessage(senderId, history);
@@ -264,7 +286,16 @@ async function handleQuickReplyPayload(senderId, payload) {
       break;
       
     default:
-      await sendMainMenu(senderId);
+      // Handle item selection for add stock, change price, or item sold
+      if (payload.startsWith('ADD_STOCK_')) {
+        await handleAddStockSelected(senderId, payload.replace('ADD_STOCK_', ''));
+      } else if (payload.startsWith('CHANGE_PRICE_')) {
+        await handleChangePriceSelected(senderId, payload.replace('CHANGE_PRICE_', ''));
+      } else if (payload.startsWith('ITEM_SOLD_')) {
+        await handleItemSoldSelected(senderId, payload.replace('ITEM_SOLD_', ''));
+      } else {
+        await sendMainMenu(senderId);
+      }
   }
 }
 
@@ -347,14 +378,12 @@ async function sendWelcomeMessage(senderId) {
 // Send main menu quick replies
 async function sendMainMenu(senderId) {
   await messengerModule.sendQuickReplies(senderId, '🏪 Pumili ng aksyon:', [
-    { title: '📦 New Item', payload: 'NEW_ITEM' },
-    { title: '💰 Sold Item', payload: 'SOLD_ITEM' },
-    { title: '📋 Check Stock', payload: 'CHECK_STOCK' },
-    { title: '⚠️ Low Stock', payload: 'LOW_STOCK' },
-    { title: '📅 Expiry Check', payload: 'EXPIRY_CHECK' },
-    { title: '💵 Daily Sales', payload: 'DAILY_SALES' },
+    { title: '📦 Add Item to Inventory', payload: 'ADD_ITEM_TO_INVENTORY' },
+    { title: '➕ Add Stock to Item', payload: 'ADD_STOCK_TO_ITEM' },
+    { title: '💰 Change Item Price', payload: 'CHANGE_ITEM_PRICE' },
+    { title: '📤 Item Sold', payload: 'ITEM_SOLD' },
     { title: '📊 Summary', payload: 'SUMMARY' },
-    { title: '❓ Help', payload: 'HELP' }
+    { title: '🧾 Read Receipt', payload: 'READ_RECEIPT' }
   ]);
 }
 
@@ -696,6 +725,176 @@ async function showDailySales(senderId) {
     await messengerModule.sendTextMessage(senderId,
       '❌ May error sa pag-generate ng sales report. Subukan ulit.');
   }
+}
+
+// NEW HANDLER FUNCTIONS
+
+// Handle Add Item to Inventory
+async function handleAddItemToInventory(senderId) {
+  await messengerModule.sendTextMessage(senderId, 
+    '📦 *Add New Item to Inventory*\n\nI-type ang item details sa format na ito:\n\n**Format:** "[Item Name] [Price] [Quantity] [Unit]"\n\n**Examples:**\n• "Coca-Cola 15 24 pcs"\n• "Rice 50 10 kg"\n• "Bread 25 20 pcs"\n\nO kaya i-type lang ang:\n• Item name at price: "Shampoo 120"\n• System ay mag-assume ng 1 pcs');
+}
+
+// Handle Add Stock to Item (shows item selection menu)
+async function handleAddStockToItem(senderId) {
+  try {
+    const items = await databaseModule.getAllInventoryItems(senderId, 10);
+    
+    if (items.length === 0) {
+      await messengerModule.sendTextMessage(senderId,
+        '📦 Walang items sa inventory mo pa.\n\nMag-add ng items muna using "Add Item to Inventory"');
+      await sendMainMenu(senderId);
+      return;
+    }
+    
+    // Create quick replies for each item (max 13 for Messenger limits)
+    const quickReplies = items.slice(0, 10).map(item => ({
+      title: `${item.item_name} (${item.quantity} ${item.unit})`,
+      payload: `ADD_STOCK_${item.id}`
+    }));
+    
+    // Add back to main menu option
+    quickReplies.push({ title: '🏠 Main Menu', payload: 'MAIN_MENU' });
+    
+    await messengerModule.sendQuickReplies(senderId, 
+      '➕ *Add Stock to Item*\n\nPiliin ang item na gusto mong dagdagan ng stock:', 
+      quickReplies);
+      
+  } catch (error) {
+    console.error('Add stock to item error:', error);
+    await messengerModule.sendTextMessage(senderId, 
+      '❌ May error sa pag-load ng items. Subukan ulit.');
+    await sendMainMenu(senderId);
+  }
+}
+
+// Handle when user selects an item to add stock to
+async function handleAddStockSelected(senderId, itemId) {
+  try {
+    // Get the item details
+    const item = await databaseModule.getInventoryItem(senderId, '', itemId); // We need to modify this function to accept ID
+    
+    if (!item) {
+      await messengerModule.sendTextMessage(senderId,
+        '❌ Item not found. Returning to main menu.');
+      await sendMainMenu(senderId);
+      return;
+    }
+    
+    // Store the selected item ID in a temporary way (we'll use text parsing)
+    await messengerModule.sendTextMessage(senderId,
+      `➕ *Adding Stock to: ${item.item_name}*\n\nCurrent Stock: ${item.quantity} ${item.unit}\nPrice: ₱${item.price} per ${item.unit}\n\n**I-type ang quantity na idadagdag:**\n\nExample: "5" (para mag-add ng 5 ${item.unit})\n\nNote: I-type lang ang number`);
+    
+    // We'll handle the response in text parsing by checking for numbers and matching with recent context
+    
+  } catch (error) {
+    console.error('Add stock selected error:', error);
+    await messengerModule.sendTextMessage(senderId, 
+      '❌ May error. Subukan ulit.');
+    await sendMainMenu(senderId);
+  }
+}
+
+// Handle Change Item Price (shows item selection menu)
+async function handleChangeItemPrice(senderId) {
+  try {
+    const items = await databaseModule.getAllInventoryItems(senderId, 10);
+    
+    if (items.length === 0) {
+      await messengerModule.sendTextMessage(senderId,
+        '📦 Walang items sa inventory mo pa.\n\nMag-add ng items muna using "Add Item to Inventory"');
+      await sendMainMenu(senderId);
+      return;
+    }
+    
+    // Create quick replies for each item
+    const quickReplies = items.slice(0, 10).map(item => ({
+      title: `${item.item_name} (₱${item.price})`,
+      payload: `CHANGE_PRICE_${item.id}`
+    }));
+    
+    // Add back to main menu option
+    quickReplies.push({ title: '🏠 Main Menu', payload: 'MAIN_MENU' });
+    
+    await messengerModule.sendQuickReplies(senderId, 
+      '💰 *Change Item Price*\n\nPiliin ang item na gusto mong baguhin ang price:', 
+      quickReplies);
+      
+  } catch (error) {
+    console.error('Change item price error:', error);
+    await messengerModule.sendTextMessage(senderId, 
+      '❌ May error sa pag-load ng items. Subukan ulit.');
+    await sendMainMenu(senderId);
+  }
+}
+
+// Handle when user selects an item to change price
+async function handleChangePriceSelected(senderId, itemId) {
+  try {
+    // Similar to add stock, we'll use text parsing to handle the price change
+    await messengerModule.sendTextMessage(senderId,
+      `💰 *Change Price*\n\n**I-type ang bagong price:**\n\nExample: "25" (para maging ₱25)\n"15.50" (para maging ₱15.50)\n\nNote: I-type lang ang number/amount`);
+    
+  } catch (error) {
+    console.error('Change price selected error:', error);
+    await messengerModule.sendTextMessage(senderId, 
+      '❌ May error. Subukan ulit.');
+    await sendMainMenu(senderId);
+  }
+}
+
+// Handle Item Sold (shows item selection menu)
+async function handleItemSold(senderId) {
+  try {
+    const items = await databaseModule.getAllInventoryItems(senderId, 10);
+    
+    if (items.length === 0) {
+      await messengerModule.sendTextMessage(senderId,
+        '📦 Walang items sa inventory mo pa.\n\nMag-add ng items muna using "Add Item to Inventory"');
+      await sendMainMenu(senderId);
+      return;
+    }
+    
+    // Create quick replies for each item with stock info
+    const quickReplies = items.slice(0, 10).map(item => ({
+      title: `${item.item_name} (${item.quantity} ${item.unit})`,
+      payload: `ITEM_SOLD_${item.id}`
+    }));
+    
+    // Add back to main menu option
+    quickReplies.push({ title: '🏠 Main Menu', payload: 'MAIN_MENU' });
+    
+    await messengerModule.sendQuickReplies(senderId, 
+      '📤 *Record Item Sold*\n\nPiliin ang item na nabenta:', 
+      quickReplies);
+      
+  } catch (error) {
+    console.error('Item sold error:', error);
+    await messengerModule.sendTextMessage(senderId, 
+      '❌ May error sa pag-load ng items. Subukan ulit.');
+    await sendMainMenu(senderId);
+  }
+}
+
+// Handle when user selects an item that was sold
+async function handleItemSoldSelected(senderId, itemId) {
+  try {
+    await messengerModule.sendTextMessage(senderId,
+      `📤 *Record Sale*\n\n**I-type ang quantity na nabenta:**\n\nExample: "3" (para sa 3 pieces)\n"2.5" (para sa 2.5 kg)\n\nNote: I-type lang ang number/amount`);
+    
+  } catch (error) {
+    console.error('Item sold selected error:', error);
+    await messengerModule.sendTextMessage(senderId, 
+      '❌ May error. Subukan ulit.');
+    await sendMainMenu(senderId);
+  }
+}
+
+// Handle Read Receipt (placeholder)
+async function handleReadReceipt(senderId) {
+  await messengerModule.sendTextMessage(senderId,
+    '🧾 *Read Receipt*\n\n📸 Mag-send ng larawan ng receipt para ma-scan at ma-extract ang information.\n\nFeature coming soon! 🚧');
+  await sendMainMenu(senderId);
 }
 
 app.listen(PORT, () => {
