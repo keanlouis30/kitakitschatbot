@@ -556,12 +556,16 @@ function guessCategory(name) {
  */
 async function handleDataConfirmation(senderId, payload) {
   try {
+    console.log(`[ONBOARDING] Handling data confirmation: ${payload} for user ${senderId}`);
+    
     switch (payload) {
       case 'ONBOARD_CONFIRM_INVENTORY':
+        console.log(`[ONBOARDING] Confirming inventory addition for user ${senderId}`);
         await confirmAndAddInventory(senderId);
         break;
         
       case 'ONBOARD_CONFIRM_SALES':
+        console.log(`[ONBOARDING] Confirming sales addition for user ${senderId}`);
         await confirmAndAddSales(senderId);
         break;
         
@@ -587,12 +591,14 @@ async function handleDataConfirmation(senderId, payload) {
         break;
         
       default:
+        console.log(`[ONBOARDING] Unknown payload: ${payload}`);
         break;
     }
   } catch (error) {
-    console.error('Error handling data confirmation:', error);
+    console.error(`[ONBOARDING] Error handling data confirmation for ${payload}:`, error);
+    console.error(`[ONBOARDING] Stack trace:`, error.stack);
     await messengerModule.sendTextMessage(senderId, 
-      'Sorry, may problema sa confirmation. Subukan ulit.');
+      `Sorry, there was an error processing your request. Error details: ${error.message}. Please try again.`);
   }
 }
 
@@ -613,16 +619,18 @@ async function confirmAndAddInventory(senderId) {
     
     for (const item of items) {
       try {
+        console.log(`Adding item to inventory: ${JSON.stringify(item)}`);
         await databaseModule.addInventoryItem({
           senderId,
           itemName: item.name,
           price: item.price,
           quantity: item.quantity,
           unit: item.unit,
-          category: item.category
+          category: item.category || 'general' // Provide default category if missing
         });
         successCount++;
       } catch (error) {
+        console.error(`Error adding item ${item.name} to inventory:`, error);
         errors.push(`${item.name}: ${error.message}`);
       }
     }
@@ -953,5 +961,7 @@ module.exports = {
   handleInventoryPagination,
   completeOnboarding,
   getOnboardingState,
+  setupInventoryUpload,
+  setupSalesUpload,
   ONBOARDING_STATES
 };

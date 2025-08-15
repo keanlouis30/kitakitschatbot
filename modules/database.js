@@ -393,42 +393,79 @@ function addInventoryItem(data) {
   return new Promise((resolve, reject) => {
     const { senderId, itemName, price, quantity = 0, unit = 'pcs', category, expiryDate } = data;
     
+    // Validate required fields
+    if (!senderId) {
+      reject(new Error('Sender ID is required'));
+      return;
+    }
+    
+    if (!itemName || itemName.trim() === '') {
+      reject(new Error('Item name is required'));
+      return;
+    }
+    
+    if (price === undefined || price === null || isNaN(price)) {
+      reject(new Error('Valid price is required'));
+      return;
+    }
+    
+    if (quantity === undefined || quantity === null || isNaN(quantity)) {
+      reject(new Error('Valid quantity is required'));
+      return;
+    }
+    
+    console.log(`[DATABASE] Adding inventory item: ${JSON.stringify({
+      senderId,
+      itemName: itemName.trim(),
+      price: Number(price),
+      quantity: Number(quantity),
+      unit,
+      category: category || 'general'
+    })}`);
+    
     // Check if item already exists
     db.get(
       `SELECT * FROM inventory_items WHERE sender_id = ? AND LOWER(item_name) = LOWER(?)`,
-      [senderId, itemName],
+      [senderId, itemName.trim()],
       (err, existing) => {
         if (err) {
+          console.error('[DATABASE] Error checking existing item:', err);
           reject(err);
           return;
         }
         
         if (existing) {
+          console.log('[DATABASE] Item exists, updating quantity');
           // Update existing item
           db.run(
             `UPDATE inventory_items 
              SET quantity = quantity + ?, price = ?, unit = ?, category = ?, expiry_date = ?, updated_at = CURRENT_TIMESTAMP
              WHERE sender_id = ? AND LOWER(item_name) = LOWER(?)`,
-            [quantity, price, unit, category, expiryDate, senderId, itemName],
+            [Number(quantity), Number(price), unit, category || 'general', expiryDate, senderId, itemName.trim()],
             function(err) {
               if (err) {
+                console.error('[DATABASE] Error updating inventory item:', err);
                 reject(err);
               } else {
-                resolve({ id: existing.id, updated: true, newQuantity: existing.quantity + quantity });
+                console.log('[DATABASE] Successfully updated inventory item');
+                resolve({ id: existing.id, updated: true, newQuantity: existing.quantity + Number(quantity) });
               }
             }
           );
         } else {
+          console.log('[DATABASE] Creating new inventory item');
           // Insert new item
           db.run(
             `INSERT INTO inventory_items (sender_id, item_name, price, quantity, unit, category, expiry_date) 
              VALUES (?, ?, ?, ?, ?, ?, ?)`,
-            [senderId, itemName, price, quantity, unit, category, expiryDate],
+            [senderId, itemName.trim(), Number(price), Number(quantity), unit, category || 'general', expiryDate],
             function(err) {
               if (err) {
+                console.error('[DATABASE] Error inserting inventory item:', err);
                 reject(err);
               } else {
-                resolve({ id: this.lastID, created: true, quantity });
+                console.log('[DATABASE] Successfully created inventory item');
+                resolve({ id: this.lastID, created: true, quantity: Number(quantity) });
               }
             }
           );
