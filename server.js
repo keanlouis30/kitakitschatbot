@@ -238,7 +238,7 @@ async function handleQuickReplyPayload(senderId, payload) {
       break;
       
     case 'SUMMARY':
-      const summary = await queryModule.generateSummary(senderId);
+      const summary = await queryModule.generateBusinessSummary(senderId);
       await messengerModule.sendTextMessage(senderId, summary);
       await sendMainMenu(senderId);
       break;

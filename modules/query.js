@@ -274,11 +274,147 @@ async function exportUserData(senderId) {
   }
 }
 
+/**
+ * Generate a business-focused summary showing sales stats and inventory insights
+ */
+async function generateBusinessSummary(senderId) {
+  try {
+    // Get sales data for last 30 days
+    const salesData = await databaseModule.getSalesSummary(senderId, 30);
+    
+    // Get inventory items
+    const inventoryItems = await databaseModule.getAllInventoryItems(senderId);
+    
+    // Get low stock items
+    const lowStockItems = await databaseModule.getLowStockItems(senderId, 5);
+    
+    // Get expiring items in next 7 days
+    const expiringItems = await databaseModule.getExpiringItems(senderId, 7);
+    
+    // If no data, return a simple message
+    if (salesData.length === 0 && inventoryItems.length === 0) {
+      return 'No sales or inventory data found. Start by adding items to your inventory!';
+    }
+    
+    // Calculate total revenue and total items sold
+    let totalRevenue = 0;
+    let totalItemsSold = 0;
+    salesData.forEach(sale => {
+      totalRevenue += sale.total_revenue || 0;
+      totalItemsSold += sale.total_sold || 0;
+    });
+    
+    // Calculate inventory value
+    let totalInventoryValue = 0;
+    let totalInventoryItems = 0;
+    inventoryItems.forEach(item => {
+      const itemValue = (item.price || 0) * (item.quantity || 0);
+      totalInventoryValue += itemValue;
+      totalInventoryItems += (item.quantity || 0);
+    });
+    
+    // Build summary text
+    let summary = `📊 *BUSINESS SUMMARY*\n\n`;
+    
+    // Sales summary section
+    summary += `💰 *SALES SUMMARY (Last 30 Days)*\n`;
+    summary += `Total Revenue: ₱${totalRevenue.toFixed(2)}\n`;
+    summary += `Total Items Sold: ${totalItemsSold}\n`;
+    summary += `Transactions: ${salesData.length}\n\n`;
+    
+    // Top selling items
+    if (salesData.length > 0) {
+      summary += `🔝 *TOP SELLING ITEMS*\n`;
+      const topItems = salesData
+        .sort((a, b) => (b.total_sold || 0) - (a.total_sold || 0))
+        .slice(0, 3);
+        
+      topItems.forEach((item, index) => {
+        summary += `${index + 1}. ${item.item_name}: ${item.total_sold} units (₱${item.total_revenue.toFixed(2)})\n`;
+      });
+      summary += '\n';
+      
+      // Least selling items
+      if (salesData.length > 3) {
+        summary += `⬇️ *LEAST SELLING ITEMS*\n`;
+        const leastItems = [...salesData]
+          .sort((a, b) => (a.total_sold || 0) - (b.total_sold || 0))
+          .slice(0, 3);
+          
+        leastItems.forEach((item, index) => {
+          summary += `${index + 1}. ${item.item_name}: ${item.total_sold} units (₱${item.total_revenue.toFixed(2)})\n`;
+        });
+        summary += '\n';
+      }
+    }
+    
+    // Inventory summary
+    summary += `📦 *INVENTORY SUMMARY*\n`;
+    summary += `Total Items: ${inventoryItems.length}\n`;
+    summary += `Total Units in Stock: ${totalInventoryItems}\n`;
+    summary += `Inventory Value: ₱${totalInventoryValue.toFixed(2)}\n\n`;
+    
+    // Low stock alerts
+    if (lowStockItems.length > 0) {
+      summary += `⚠️ *LOW STOCK ALERTS*\n`;
+      lowStockItems.forEach((item, index) => {
+        summary += `${index + 1}. ${item.item_name}: ${item.quantity} ${item.unit} remaining\n`;
+      });
+      summary += '\n';
+    }
+    
+    // Expiring items alerts
+    if (expiringItems.length > 0) {
+      summary += `⏱️ *EXPIRING SOON*\n`;
+      expiringItems.forEach((item, index) => {
+        const expiryDate = new Date(item.expiry_date).toLocaleDateString();
+        summary += `${index + 1}. ${item.item_name}: ${item.quantity} ${item.unit} (Exp: ${expiryDate})\n`;
+      });
+      summary += '\n';
+    }
+    
+    // Quick business insights
+    if (salesData.length > 0 && inventoryItems.length > 0) {
+      summary += `💡 *QUICK INSIGHTS*\n`;
+      
+      // Average daily sales
+      const avgDailySales = totalRevenue / 30;
+      summary += `• Avg. Daily Sales: ₱${avgDailySales.toFixed(2)}\n`;
+      
+      // Inventory turnover
+      if (totalInventoryValue > 0) {
+        const inventoryTurnover = totalRevenue / totalInventoryValue;
+        summary += `• Inventory Turnover: ${inventoryTurnover.toFixed(2)}x\n`;
+      }
+      
+      // Most profitable item
+      if (salesData.length > 0) {
+        const mostProfitable = salesData.sort((a, b) => (b.total_revenue || 0) - (a.total_revenue || 0))[0];
+        summary += `• Most Profitable: ${mostProfitable.item_name} (₱${mostProfitable.total_revenue.toFixed(2)})\n`;
+      }
+    }
+    
+    // Store summary in database
+    await databaseModule.insertSummary({
+      senderId,
+      summaryType: 'business',
+      summaryText: summary,
+      dataCount: salesData.length + inventoryItems.length
+    });
+    
+    return summary;
+  } catch (error) {
+    console.error('Error generating business summary:', error);
+    return 'Error generating business summary. Please try again.';
+  }
+}
+
 module.exports = {
   generateSummary,
   getUserHistory,
   searchOCRResults,
   generateInsights,
   generateReceiptSummary,
+  generateBusinessSummary,
   exportUserData
 };
