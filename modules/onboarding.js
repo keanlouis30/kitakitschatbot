@@ -198,21 +198,32 @@ async function processOnboardingImage(senderId, imageUrl) {
       '📸 Processing your photo... This may take a moment.');
     await messengerModule.sendTypingIndicator(senderId, true);
     
-    // Extract text using enhanced OCR
-    const ocrResult = await ocrModule.processReceipt(imageUrl);
+    // Use smart OCR based on onboarding type
+    let ocrResult;
+    
+    if (currentState === ONBOARDING_STATES.UPLOAD_INVENTORY) {
+      // Use intelligent inventory extraction
+      ocrResult = await ocrModule.extractInventoryFromImage(imageUrl);
+    } else if (currentState === ONBOARDING_STATES.UPLOAD_SALES) {
+      // Use intelligent sales extraction
+      ocrResult = await ocrModule.extractSalesFromImage(imageUrl);
+    } else {
+      // Fallback to general text extraction
+      ocrResult = await ocrModule.extractTextFromImage(imageUrl);
+    }
     
     // Store OCR result
     await databaseModule.insertOCRResult({
       senderId,
       imageUrl,
-      extractedText: ocrResult.rawText,
-      confidence: ocrResult.confidence,
+      extractedText: ocrResult.rawText || ocrResult.text,
+      confidence: ocrResult.confidence || (ocrResult.success ? 90 : 50),
       timestamp: new Date().toISOString()
     });
     
     await messengerModule.sendTypingIndicator(senderId, false);
     
-    // Parse the extracted data based on onboarding type
+    // Process the extracted data based on onboarding type
     if (currentState === ONBOARDING_STATES.UPLOAD_INVENTORY) {
       await processInventoryData(senderId, ocrResult);
     } else if (currentState === ONBOARDING_STATES.UPLOAD_SALES) {
@@ -233,12 +244,29 @@ async function processOnboardingImage(senderId, imageUrl) {
  */
 async function processInventoryData(senderId, ocrResult) {
   try {
-    const extractedItems = parseInventoryFromText(ocrResult.rawText);
+    let extractedItems = [];
+    
+    // Check if Gemini OCR provided structured inventory data
+    if (ocrResult.items && Array.isArray(ocrResult.items)) {
+      // Use structured data from Gemini OCR
+      extractedItems = ocrResult.items.map(item => ({
+        name: item.name || item.item_name,
+        quantity: parseInt(item.quantity) || 1,
+        unit: item.unit || 'pcs',
+        price: parseFloat(item.price || item.unit_price || 0),
+        category: item.category || guessCategory(item.name || item.item_name)
+      }));
+    } else {
+      // Fallback to text parsing for legacy OCR
+      const textToProcess = ocrResult.rawText || ocrResult.text || '';
+      extractedItems = parseInventoryFromText(textToProcess);
+    }
     
     if (extractedItems.length === 0) {
+      const displayText = ocrResult.rawText || ocrResult.text || 'No text extracted';
       await messengerModule.sendTextMessage(senderId, 
         `📸 I scanned your photo but couldn't find any inventory items.\n\n` +
-        `**Text I found:**\n"${ocrResult.rawText}"\n\n` +
+        `**Text I found:**\n"${displayText}"\n\n` +
         `Please try another photo with clearer text showing item names, quantities, and prices.`);
       return;
     }
@@ -283,12 +311,36 @@ async function processInventoryData(senderId, ocrResult) {
  */
 async function processSalesData(senderId, ocrResult) {
   try {
-    const extractedSales = parseSalesFromText(ocrResult.rawText);
+    let extractedSales = [];
+    
+    // Check if Gemini OCR provided structured sales data
+    if (ocrResult.sales && Array.isArray(ocrResult.sales)) {
+      // Use structured data from Gemini OCR
+      extractedSales = ocrResult.sales.map(sale => ({
+        itemName: sale.item_name || sale.product_name || sale.name,
+        quantity: parseInt(sale.quantity) || 1,
+        price: parseFloat(sale.unit_price || sale.price || 0),
+        unit: sale.unit || 'pcs'
+      }));
+    } else if (ocrResult.items && Array.isArray(ocrResult.items)) {
+      // Handle cases where sales are returned as items array
+      extractedSales = ocrResult.items.map(item => ({
+        itemName: item.name || item.item_name,
+        quantity: parseInt(item.quantity_sold || item.quantity || 1),
+        price: parseFloat(item.unit_price || item.price || 0),
+        unit: item.unit || 'pcs'
+      }));
+    } else {
+      // Fallback to text parsing for legacy OCR
+      const textToProcess = ocrResult.rawText || ocrResult.text || '';
+      extractedSales = parseSalesFromText(textToProcess);
+    }
     
     if (extractedSales.length === 0) {
+      const displayText = ocrResult.rawText || ocrResult.text || 'No text extracted';
       await messengerModule.sendTextMessage(senderId, 
         `📸 I scanned your photo but couldn't find any sales data.\n\n` +
-        `**Text I found:**\n"${ocrResult.rawText}"\n\n` +
+        `**Text I found:**\n"${displayText}"\n\n` +
         `Please try another photo with clearer sales information.`);
       return;
     }
