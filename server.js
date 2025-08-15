@@ -276,23 +276,38 @@ async function handleTextCommands(senderId, lowerText, originalText) {
       lowerText.includes('start')) {
     await sendWelcomeMessage(senderId);
   }
-  // Add new item commands
+  // Smart inventory management - Add item with parsing
+  else if (await parseAddItemCommand(senderId, lowerText, originalText)) {
+    // Command was processed by parseAddItemCommand
+    return;
+  }
+  // Smart inventory management - Sold item with parsing
+  else if (await parseSoldItemCommand(senderId, lowerText, originalText)) {
+    // Command was processed by parseSoldItemCommand
+    return;
+  }
+  // Smart inventory management - Stock check with parsing
+  else if (await parseStockCheckCommand(senderId, lowerText, originalText)) {
+    // Command was processed by parseStockCheckCommand
+    return;
+  }
+  // Add new item commands (fallback)
   else if (lowerText.includes('add') || lowerText.includes('dagdag') ||
            lowerText.includes('bago') || lowerText.includes('new')) {
     await messengerModule.sendTextMessage(senderId, 
-      '📦 Mag-add ng item\n\nI-format: "[Item name] [price] [quantity]"\nHalimbawa: "Coca-Cola 15 20pcs"');
+      '📦 Mag-add ng item\n\nMga format:\n• "Add Coca-Cola 15 20pcs"\n• "Dagdag Rice 50 10kg"\n• "New Bread 25 15pcs"');
   }
-  // Sales/sold commands
+  // Sales/sold commands (fallback)
   else if (lowerText.includes('sold') || lowerText.includes('nabenta') ||
            lowerText.includes('sale') || lowerText.includes('benta')) {
     await messengerModule.sendTextMessage(senderId, 
-      '💰 Record ng benta\n\nI-format: "Sold [item] [quantity]"\nHalimbawa: "Sold Coca-Cola 5pcs"');
+      '💰 Record ng benta\n\nMga format:\n• "Sold Coca-Cola 5pcs"\n• "Nabenta Rice 2kg"\n• "Sale Bread 3pcs"');
   }
-  // Stock check commands
+  // Stock check commands (fallback)
   else if (lowerText.includes('stock') || lowerText.includes('check') ||
            lowerText.includes('inventory') || lowerText.includes('tira')) {
     await messengerModule.sendTextMessage(senderId, 
-      '📋 Stock Check\n\nI-type ang item na gusto mong i-check:\n"Stock [item name]"');
+      '📋 Stock Check\n\nMga format:\n• "Stock Coca-Cola"\n• "Check Rice"\n• "Tira ng Bread"');
   }
   // Help commands
   else if (lowerText.includes('help') || lowerText.includes('tulong') ||
@@ -304,10 +319,15 @@ async function handleTextCommands(senderId, lowerText, originalText) {
            lowerText.includes('main') || lowerText.includes('home')) {
     await sendMainMenu(senderId);
   }
+  // List all inventory
+  else if (lowerText.includes('list') || lowerText.includes('show all') ||
+           lowerText.includes('lahat') || lowerText.includes('inventory')) {
+    await showAllInventory(senderId);
+  }
   // Default response for unrecognized text
   else {
     await messengerModule.sendTextMessage(senderId, 
-      `📝 Natanggap: "${originalText}"\n\nHindi ko naintindihan. Subukan ang menu o mag-type ng "help" para sa mga commands.`);
+      `📝 Natanggap: "${originalText}"\n\nHindi ko naintindihan. Subukan ang mga ito:\n• "Add [item] [price] [qty]"\n• "Stock [item]"\n• "Sold [item] [qty]"\n• "Help" para sa commands`);
     await sendMainMenu(senderId);
   }
 }
@@ -361,6 +381,297 @@ async function showDailySales(senderId) {
   await messengerModule.sendTextMessage(senderId, 
     '💵 Daily Sales Report\n\nToday\'s Sales: ₱0.00\nTransactions: 0\n\nMag-record ng sales para makita ang report!');
   await sendMainMenu(senderId);
+}
+
+// Smart text parsing functions
+
+// Parse Add Item Commands (e.g., "Add Coca-Cola 15 20pcs", "Dagdag Rice 50 10kg")
+async function parseAddItemCommand(senderId, lowerText, originalText) {
+  const addPatterns = [
+    /^(add|dagdag|new|bago)\s+([\w\s-]+?)\s+(\d+(?:\.\d+)?)(?:\s+(\d+)\s*(\w+)?)?/i,
+    /^([\w\s-]+?)\s+(\d+(?:\.\d+)?)(?:\s+(\d+)\s*(\w+)?)?$/i
+  ];
+  
+  for (const pattern of addPatterns) {
+    const match = originalText.match(pattern);
+    if (match) {
+      const isExplicitAdd = ['add', 'dagdag', 'new', 'bago'].includes(match[1]?.toLowerCase());
+      let itemName, price, quantity, unit;
+      
+      if (isExplicitAdd) {
+        itemName = match[2].trim();
+        price = parseFloat(match[3]);
+        quantity = parseInt(match[4]) || 1;
+        unit = match[5] || 'pcs';
+      } else if (match[2] && !isNaN(match[2])) { // Simple format: "ItemName Price Quantity"
+        itemName = match[1].trim();
+        price = parseFloat(match[2]);
+        quantity = parseInt(match[3]) || 1;
+        unit = match[4] || 'pcs';
+      } else {
+        continue; // Try next pattern
+      }
+      
+      if (itemName && price > 0) {
+        try {
+          const result = await databaseModule.addInventoryItem({
+            senderId,
+            itemName,
+            price,
+            quantity,
+            unit
+          });
+          
+          if (result.created) {
+            await messengerModule.sendTextMessage(senderId,
+              `✅ Naidagdag sa inventory:\n\n📦 ${itemName}\n💰 ₱${price} per ${unit}\n📊 Quantity: ${quantity} ${unit}\n\n${itemName} ay nasa inventory mo na!`);
+          } else if (result.updated) {
+            await messengerModule.sendTextMessage(senderId,
+              `✅ Na-update ang inventory:\n\n📦 ${itemName}\n💰 ₱${price} per ${unit}\n📊 New total: ${result.newQuantity} ${unit}\n\nNadagdag ang ${quantity} ${unit}!`);
+          }
+          
+          await sendMainMenu(senderId);
+          return true;
+        } catch (error) {
+          console.error('Add item error:', error);
+          await messengerModule.sendTextMessage(senderId,
+            `❌ May error sa pag-add ng ${itemName}. Subukan ulit.`);
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+// Parse Sold Item Commands (e.g., "Sold Coca-Cola 5pcs", "Nabenta Rice 2kg")
+async function parseSoldItemCommand(senderId, lowerText, originalText) {
+  const soldPatterns = [
+    /^(sold|nabenta|sale|benta)\s+([\w\s-]+?)(?:\s+(\d+)\s*(\w+)?)?$/i
+  ];
+  
+  for (const pattern of soldPatterns) {
+    const match = originalText.match(pattern);
+    if (match) {
+      const itemName = match[2].trim();
+      const quantity = parseInt(match[3]) || 1;
+      const unit = match[4] || 'pcs';
+      
+      try {
+        // Get item from inventory to check if it exists and get price
+        const item = await databaseModule.getInventoryItem(senderId, itemName);
+        
+        if (!item) {
+          await messengerModule.sendTextMessage(senderId,
+            `❌ Hindi nakita ang "${itemName}" sa inventory mo.\n\nSubukan:\n• "Add ${itemName} [price] [qty]" muna\n• I-check ang spelling\n• "List" para tingnan lahat`);
+          return true;
+        }
+        
+        if (item.quantity < quantity) {
+          await messengerModule.sendTextMessage(senderId,
+            `⚠️ Kulang ang stock!\n\n📦 ${itemName}\n📊 Available: ${item.quantity} ${item.unit}\n🛒 Gusto mo ibenta: ${quantity} ${unit}\n\nHindi pwedeng mag-oversell.`);
+          return true;
+        }
+        
+        const totalAmount = item.price * quantity;
+        
+        // Record the sale
+        await databaseModule.recordSale({
+          senderId,
+          itemName,
+          quantitySold: quantity,
+          unitPrice: item.price,
+          totalAmount
+        });
+        
+        const remainingStock = item.quantity - quantity;
+        
+        await messengerModule.sendTextMessage(senderId,
+          `💰 Sale recorded!\n\n📦 ${itemName}\n🛒 Nabenta: ${quantity} ${item.unit}\n💵 @ ₱${item.price} each\n💸 Total: ₱${totalAmount.toFixed(2)}\n\n📊 Remaining stock: ${remainingStock} ${item.unit}`);
+        
+        if (remainingStock <= 5) {
+          await messengerModule.sendTextMessage(senderId,
+            `⚠️ LOW STOCK ALERT!\n\n📦 ${itemName} = ${remainingStock} ${item.unit} na lang\n\nTime to restock!`);
+        }
+        
+        await sendMainMenu(senderId);
+        return true;
+        
+      } catch (error) {
+        console.error('Record sale error:', error);
+        await messengerModule.sendTextMessage(senderId,
+          `❌ May error sa pag-record ng sale. Subukan ulit.`);
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+// Parse Stock Check Commands (e.g., "Stock Coca-Cola", "Check Rice", "Tira ng Bread")
+async function parseStockCheckCommand(senderId, lowerText, originalText) {
+  const stockPatterns = [
+    /^(stock|check|tira)\s+(?:ng\s+)?([\w\s-]+?)$/i,
+    /^([\w\s-]+?)\s+(stock|available|natira)$/i
+  ];
+  
+  for (const pattern of stockPatterns) {
+    const match = originalText.match(pattern);
+    if (match) {
+      let itemName;
+      
+      if (['stock', 'check', 'tira'].includes(match[1]?.toLowerCase())) {
+        itemName = match[2].trim();
+      } else {
+        itemName = match[1].trim();
+      }
+      
+      try {
+        // Try exact match first
+        let item = await databaseModule.getInventoryItem(senderId, itemName);
+        
+        if (!item) {
+          // Try partial search if exact match fails
+          const searchResults = await databaseModule.searchInventoryItems(senderId, itemName);
+          
+          if (searchResults.length === 0) {
+            await messengerModule.sendTextMessage(senderId,
+              `❌ Hindi nakita ang "${itemName}" sa inventory.\n\nSubukan:\n• I-check ang spelling\n• "List" para tingnan lahat\n• "Add ${itemName} [price] [qty]" kung wala pa`);
+            return true;
+          } else if (searchResults.length === 1) {
+            item = searchResults[0];
+          } else {
+            // Multiple matches found
+            let matchList = 'Nakita ko ang mga ito:\n\n';
+            searchResults.slice(0, 5).forEach((result, index) => {
+              matchList += `${index + 1}. 📦 ${result.item_name} - ${result.quantity} ${result.unit} @ ₱${result.price}\n`;
+            });
+            
+            matchList += `\nI-type ang exact name ng item na gusto mo i-check.`;
+            await messengerModule.sendTextMessage(senderId, matchList);
+            return true;
+          }
+        }
+        
+        // Display item details
+        const stockStatus = item.quantity <= 5 ? '⚠️ LOW STOCK' : 
+                           item.quantity <= 10 ? '🟡 MEDIUM STOCK' : '✅ GOOD STOCK';
+        
+        await messengerModule.sendTextMessage(senderId,
+          `📦 ${item.item_name}\n\n📊 Stock: ${item.quantity} ${item.unit}\n💰 Price: ₱${item.price} per ${item.unit}\n📈 Status: ${stockStatus}\n🗓️ Last updated: ${new Date(item.updated_at).toLocaleDateString()}`);
+        
+        await sendMainMenu(senderId);
+        return true;
+        
+      } catch (error) {
+        console.error('Stock check error:', error);
+        await messengerModule.sendTextMessage(senderId,
+          `❌ May error sa pag-check ng stock. Subukan ulit.`);
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+// Show all inventory items
+async function showAllInventory(senderId) {
+  try {
+    const items = await databaseModule.getAllInventoryItems(senderId, 20);
+    
+    if (items.length === 0) {
+      await messengerModule.sendTextMessage(senderId,
+        '📦 Walang items sa inventory mo pa.\n\nMag-add ng items gamit ang:\n"Add [item] [price] [quantity]"\n\nHalimbawa: "Add Coca-Cola 15 24pcs"');
+      await sendMainMenu(senderId);
+      return;
+    }
+    
+    let inventoryList = `📦 YOUR INVENTORY (${items.length} items)\n\n`;
+    let totalValue = 0;
+    
+    items.forEach((item, index) => {
+      const itemValue = item.price * item.quantity;
+      totalValue += itemValue;
+      const stockStatus = item.quantity <= 5 ? '⚠️' : item.quantity <= 10 ? '🟡' : '✅';
+      
+      inventoryList += `${index + 1}. ${stockStatus} ${item.item_name}\n`;
+      inventoryList += `   📊 ${item.quantity} ${item.unit} @ ₱${item.price}\n`;
+      inventoryList += `   💰 Value: ₱${itemValue.toFixed(2)}\n\n`;
+    });
+    
+    inventoryList += `💼 TOTAL INVENTORY VALUE: ₱${totalValue.toFixed(2)}`;
+    
+    await messengerModule.sendTextMessage(senderId, inventoryList);
+    await sendMainMenu(senderId);
+    
+  } catch (error) {
+    console.error('Show inventory error:', error);
+    await messengerModule.sendTextMessage(senderId,
+      '❌ May error sa pag-display ng inventory. Subukan ulit.');
+  }
+}
+
+// Update low stock check to use real data
+async function checkLowStockItems(senderId) {
+  try {
+    const lowStockItems = await databaseModule.getLowStockItems(senderId, 10);
+    
+    if (lowStockItems.length === 0) {
+      await messengerModule.sendTextMessage(senderId,
+        '✅ Walang low stock items!\n\nLahat ng items mo ay may sapat na stock.');
+    } else {
+      let alertMessage = `⚠️ LOW STOCK ALERT! (${lowStockItems.length} items)\n\n`;
+      
+      lowStockItems.forEach((item, index) => {
+        alertMessage += `${index + 1}. 📦 ${item.item_name}\n`;
+        alertMessage += `   📊 ${item.quantity} ${item.unit} na lang\n`;
+        alertMessage += `   💰 ₱${item.price} per ${item.unit}\n\n`;
+      });
+      
+      alertMessage += '🛒 Time to restock these items!';
+      await messengerModule.sendTextMessage(senderId, alertMessage);
+    }
+    
+    await sendMainMenu(senderId);
+  } catch (error) {
+    console.error('Low stock check error:', error);
+    await messengerModule.sendTextMessage(senderId,
+      '❌ May error sa pag-check ng low stock. Subukan ulit.');
+  }
+}
+
+// Update daily sales to use real data
+async function showDailySales(senderId) {
+  try {
+    const salesSummary = await databaseModule.getSalesSummary(senderId, 1);
+    
+    if (salesSummary.length === 0) {
+      await messengerModule.sendTextMessage(senderId,
+        '💵 Daily Sales Report\n\nToday\'s Sales: ₱0.00\nTransactions: 0\n\n📝 Mag-record ng sales para makita ang detailed report!');
+    } else {
+      let totalRevenue = salesSummary.reduce((sum, item) => sum + item.total_revenue, 0);
+      let totalTransactions = salesSummary.reduce((sum, item) => sum + item.transaction_count, 0);
+      
+      let salesReport = `💵 TODAY'S SALES REPORT\n\n`;
+      salesReport += `💰 Total Revenue: ₱${totalRevenue.toFixed(2)}\n`;
+      salesReport += `🛒 Total Transactions: ${totalTransactions}\n\n`;
+      salesReport += `📊 TOP SELLERS:\n\n`;
+      
+      salesSummary.slice(0, 5).forEach((item, index) => {
+        salesReport += `${index + 1}. 📦 ${item.item_name}\n`;
+        salesReport += `   🛒 Sold: ${item.total_sold} pcs\n`;
+        salesReport += `   💰 Revenue: ₱${item.total_revenue.toFixed(2)}\n\n`;
+      });
+      
+      await messengerModule.sendTextMessage(senderId, salesReport);
+    }
+    
+    await sendMainMenu(senderId);
+  } catch (error) {
+    console.error('Daily sales error:', error);
+    await messengerModule.sendTextMessage(senderId,
+      '❌ May error sa pag-generate ng sales report. Subukan ulit.');
+  }
 }
 
 app.listen(PORT, () => {

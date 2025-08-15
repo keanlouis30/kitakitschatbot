@@ -80,6 +80,42 @@ function initializeDB() {
       if (err) console.error('Error creating summaries table:', err);
       else console.log('Summaries table ready');
     });
+    
+    // Inventory items table
+    db.run(`
+      CREATE TABLE IF NOT EXISTS inventory_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        sender_id TEXT NOT NULL,
+        item_name TEXT NOT NULL,
+        price REAL,
+        quantity INTEGER DEFAULT 0,
+        unit TEXT DEFAULT 'pcs',
+        category TEXT,
+        expiry_date TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `, (err) => {
+      if (err) console.error('Error creating inventory_items table:', err);
+      else console.log('Inventory items table ready');
+    });
+    
+    // Sales transactions table
+    db.run(`
+      CREATE TABLE IF NOT EXISTS sales_transactions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        sender_id TEXT NOT NULL,
+        item_name TEXT NOT NULL,
+        quantity_sold INTEGER NOT NULL,
+        unit_price REAL,
+        total_amount REAL,
+        sale_date DATETIME DEFAULT CURRENT_TIMESTAMP,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `, (err) => {
+      if (err) console.error('Error creating sales_transactions table:', err);
+      else console.log('Sales transactions table ready');
+    });
   });
 }
 
@@ -283,6 +319,206 @@ function getDatabaseStats() {
   });
 }
 
+/**
+ * Add or update inventory item
+ */
+function addInventoryItem(data) {
+  return new Promise((resolve, reject) => {
+    const { senderId, itemName, price, quantity = 0, unit = 'pcs', category, expiryDate } = data;
+    
+    // Check if item already exists
+    db.get(
+      `SELECT * FROM inventory_items WHERE sender_id = ? AND LOWER(item_name) = LOWER(?)`,
+      [senderId, itemName],
+      (err, existing) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+        
+        if (existing) {
+          // Update existing item
+          db.run(
+            `UPDATE inventory_items 
+             SET quantity = quantity + ?, price = ?, unit = ?, category = ?, expiry_date = ?, updated_at = CURRENT_TIMESTAMP
+             WHERE sender_id = ? AND LOWER(item_name) = LOWER(?)`,
+            [quantity, price, unit, category, expiryDate, senderId, itemName],
+            function(err) {
+              if (err) {
+                reject(err);
+              } else {
+                resolve({ id: existing.id, updated: true, newQuantity: existing.quantity + quantity });
+              }
+            }
+          );
+        } else {
+          // Insert new item
+          db.run(
+            `INSERT INTO inventory_items (sender_id, item_name, price, quantity, unit, category, expiry_date) 
+             VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            [senderId, itemName, price, quantity, unit, category, expiryDate],
+            function(err) {
+              if (err) {
+                reject(err);
+              } else {
+                resolve({ id: this.lastID, created: true, quantity });
+              }
+            }
+          );
+        }
+      }
+    );
+  });
+}
+
+/**
+ * Get inventory item by name
+ */
+function getInventoryItem(senderId, itemName) {
+  return new Promise((resolve, reject) => {
+    db.get(
+      `SELECT * FROM inventory_items 
+       WHERE sender_id = ? AND LOWER(item_name) = LOWER(?)`,
+      [senderId, itemName],
+      (err, row) => {
+        if (err) {
+          reject(err);
+        } else {
+          resolve(row);
+        }
+      }
+    );
+  });
+}
+
+/**
+ * Search inventory items (partial match)
+ */
+function searchInventoryItems(senderId, searchTerm) {
+  return new Promise((resolve, reject) => {
+    db.all(
+      `SELECT * FROM inventory_items 
+       WHERE sender_id = ? AND LOWER(item_name) LIKE LOWER(?)
+       ORDER BY item_name ASC`,
+      [senderId, `%${searchTerm}%`],
+      (err, rows) => {
+        if (err) {
+          reject(err);
+        } else {
+          resolve(rows);
+        }
+      }
+    );
+  });
+}
+
+/**
+ * Get all inventory items for a user
+ */
+function getAllInventoryItems(senderId, limit = 50) {
+  return new Promise((resolve, reject) => {
+    db.all(
+      `SELECT * FROM inventory_items 
+       WHERE sender_id = ? 
+       ORDER BY updated_at DESC 
+       LIMIT ?`,
+      [senderId, limit],
+      (err, rows) => {
+        if (err) {
+          reject(err);
+        } else {
+          resolve(rows);
+        }
+      }
+    );
+  });
+}
+
+/**
+ * Record a sale transaction
+ */
+function recordSale(data) {
+  return new Promise((resolve, reject) => {
+    const { senderId, itemName, quantitySold, unitPrice, totalAmount } = data;
+    
+    db.serialize(() => {
+      // Record the sale
+      db.run(
+        `INSERT INTO sales_transactions (sender_id, item_name, quantity_sold, unit_price, total_amount) 
+         VALUES (?, ?, ?, ?, ?)`,
+        [senderId, itemName, quantitySold, unitPrice, totalAmount],
+        function(err) {
+          if (err) {
+            reject(err);
+            return;
+          }
+          
+          const saleId = this.lastID;
+          
+          // Update inventory quantity
+          db.run(
+            `UPDATE inventory_items 
+             SET quantity = quantity - ?, updated_at = CURRENT_TIMESTAMP
+             WHERE sender_id = ? AND LOWER(item_name) = LOWER(?)`,
+            [quantitySold, senderId, itemName],
+            (err) => {
+              if (err) {
+                reject(err);
+              } else {
+                resolve({ saleId, itemName, quantitySold, totalAmount });
+              }
+            }
+          );
+        }
+      );
+    });
+  });
+}
+
+/**
+ * Get low stock items
+ */
+function getLowStockItems(senderId, threshold = 5) {
+  return new Promise((resolve, reject) => {
+    db.all(
+      `SELECT * FROM inventory_items 
+       WHERE sender_id = ? AND quantity <= ? AND quantity > 0
+       ORDER BY quantity ASC`,
+      [senderId, threshold],
+      (err, rows) => {
+        if (err) {
+          reject(err);
+        } else {
+          resolve(rows);
+        }
+      }
+    );
+  });
+}
+
+/**
+ * Get sales summary for a date range
+ */
+function getSalesSummary(senderId, days = 1) {
+  return new Promise((resolve, reject) => {
+    db.all(
+      `SELECT item_name, SUM(quantity_sold) as total_sold, SUM(total_amount) as total_revenue, COUNT(*) as transaction_count
+       FROM sales_transactions 
+       WHERE sender_id = ? AND sale_date >= datetime('now', '-${days} days')
+       GROUP BY item_name
+       ORDER BY total_revenue DESC`,
+      [senderId],
+      (err, rows) => {
+        if (err) {
+          reject(err);
+        } else {
+          resolve(rows);
+        }
+      }
+    );
+  });
+}
+
 module.exports = {
   initializeDB,
   insertInteraction,
@@ -292,5 +528,13 @@ module.exports = {
   getUserOCRResults,
   getAnalyticsData,
   insertSummary,
-  getDatabaseStats
+  getDatabaseStats,
+  // Inventory management functions
+  addInventoryItem,
+  getInventoryItem,
+  searchInventoryItems,
+  getAllInventoryItems,
+  recordSale,
+  getLowStockItems,
+  getSalesSummary
 };
