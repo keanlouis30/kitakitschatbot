@@ -363,6 +363,39 @@ async function handleQuickReplyPayload(senderId, payload) {
       await sendHelpMessage(senderId);
       break;
       
+    // CONSENT FLOW HANDLERS
+    case 'CONSENT_YES':
+      await handleConsentStep(senderId, 'consent', true);
+      break;
+      
+    case 'CONSENT_NO':
+      await handleConsentRejection(senderId);
+      break;
+      
+    case 'DATA_HANDLING_YES':
+      await handleConsentStep(senderId, 'data_handling', true);
+      break;
+      
+    case 'DATA_HANDLING_NO':
+      await handleConsentRejection(senderId);
+      break;
+      
+    case 'DATA_SHARING_YES':
+      await handleConsentStep(senderId, 'data_sharing', true);
+      break;
+      
+    case 'DATA_SHARING_NO':
+      await handleConsentRejection(senderId);
+      break;
+      
+    case 'EULA_YES':
+      await handleConsentStep(senderId, 'eula', true);
+      break;
+      
+    case 'EULA_NO':
+      await handleConsentRejection(senderId);
+      break;
+      
     default:
       // Handle item selection for add stock, change price, or item sold
       if (payload.startsWith('ADD_STOCK_')) {
@@ -450,24 +483,171 @@ async function handleTextCommands(senderId, lowerText, originalText) {
   }
 }
 
-// Send welcome message for new users
-async function sendWelcomeMessage(senderId) {
-  const welcomeText = `🏪 Kumusta! Welcome sa KitaKits! \n\nAko ang inyong inventory assistant para sa sari-sari store, carinderia, at iba pang maliliit na negosyo.\n\n📱 Makakatulong ako sa:\n• 📦 Inventory tracking\n• 💰 Sales recording  \n• 📊 Business insights\n• 📸 Receipt scanning\n\nAno ang gusto ninyong gawin ngayon?`;
+// CONSENT AND POLICY FUNCTIONS
+
+// Send consent notice (first step)
+async function sendConsentNotice(senderId) {
+  const consentText = `🏪 Welcome to KitaKits! \n\nBefore we can assist you with your inventory management needs, we need your consent to collect and process your data to provide our services.\n\n📋 **Data Collection Notice**\n\nWe collect and process your:\n• Messages and interactions\n• Inventory data you provide\n• Sales transaction records\n• OCR/image processing results\n\n🔒 Your data is used exclusively to:\n• Provide inventory management services\n• Generate business insights\n• Improve our chatbot functionality\n\n**Do you consent to data collection and processing?**`;
   
-  await messengerModule.sendTextMessage(senderId, welcomeText);
+  await messengerModule.sendQuickReplies(senderId, consentText, [
+    { title: '✅ Yes, I Consent', payload: 'CONSENT_YES' },
+    { title: '❌ No, I Decline', payload: 'CONSENT_NO' }
+  ]);
+}
+
+// Send data handling policy
+async function sendDataHandlingPolicy(senderId) {
+  const policyText = `📋 **Data Handling Policy**\n\n**What data do we collect?**\n• Your messages and command inputs\n• Inventory items, prices, and quantities\n• Sales transactions and dates\n• Images you send for OCR processing\n\n**How do we use your data?**\n• Process your inventory management requests\n• Generate sales reports and analytics\n• Provide business insights and summaries\n• Improve chatbot responses and features\n\n**Data Security:**\n• Your data is stored securely in our database\n• We use industry-standard encryption\n• Data is only accessible to authorized systems\n• We do not sell your personal data to third parties\n\n**Do you agree to our Data Handling Policy?**`;
+  
+  await messengerModule.sendQuickReplies(senderId, policyText, [
+    { title: '✅ I Agree', payload: 'DATA_HANDLING_YES' },
+    { title: '❌ I Decline', payload: 'DATA_HANDLING_NO' }
+  ]);
+}
+
+// Send data sharing policy
+async function sendDataSharingPolicy(senderId) {
+  const policyText = `🤝 **Data Sharing Policy**\n\n**Analytics and Insights:**\n• We may share anonymized, aggregated data for business insights\n• Individual user data is never shared in identifiable form\n• Analytics data helps improve our services\n\n**Third-Party Services:**\n• OCR processing may use external image processing services\n• These services are bound by strict confidentiality agreements\n• No personal identification data is shared\n\n**Data Sharing Restrictions:**\n• We never sell your personal data\n• We don't share individual inventory details\n• Your business information remains confidential\n• Only anonymized usage patterns may be analyzed\n\n**Legal Requirements:**\n• Data may be shared if required by law\n• We will notify you if legally possible\n\n**Do you agree to our Data Sharing Policy?**`;
+  
+  await messengerModule.sendQuickReplies(senderId, policyText, [
+    { title: '✅ I Agree', payload: 'DATA_SHARING_YES' },
+    { title: '❌ I Decline', payload: 'DATA_SHARING_NO' }
+  ]);
+}
+
+// Send End User License Agreement (EULA)
+async function sendEULA(senderId) {
+  const eulaText = `📄 **End User License Agreement (EULA)**\n\n**License Grant:**\n• You are granted a limited, non-exclusive license to use KitaKits\n• This license is for personal/business inventory management only\n• The license is revocable at any time\n\n**User Responsibilities:**\n• Provide accurate inventory information\n• Use the service responsibly and legally\n• Do not attempt to harm or misuse the system\n• Respect other users and system resources\n\n**Service Limitations:**\n• KitaKits is provided "as is" without warranties\n• We are not liable for business decisions based on our reports\n• Service availability is not guaranteed 100% uptime\n\n**Termination:**\n• You may stop using the service at any time\n• We reserve the right to terminate accounts for misuse\n• Upon termination, your data will be deleted per our retention policy\n\n**Do you accept the End User License Agreement?**`;
+  
+  await messengerModule.sendQuickReplies(senderId, eulaText, [
+    { title: '✅ I Accept', payload: 'EULA_YES' },
+    { title: '❌ I Decline', payload: 'EULA_NO' }
+  ]);
+}
+
+// Send completion message and proceed to main features
+async function completeConsentFlow(senderId) {
+  const completionText = `🎉 **Consent Process Complete!**\n\nThank you for agreeing to our policies. You now have full access to KitaKits features!\n\n🏪 **KitaKits** - Your Inventory Assistant\n\n📱 I can help you with:\n• 📦 Inventory tracking and management\n• 💰 Sales recording and reporting\n• 📊 Business analytics and insights\n• 📸 Receipt scanning and OCR\n\nLet's get started with managing your inventory!`;
+  
+  await messengerModule.sendTextMessage(senderId, completionText);
   await sendMainMenu(senderId);
+}
+
+// Handle consent step progression
+async function handleConsentStep(senderId, consentType, accepted) {
+  try {
+    if (!accepted) {
+      await handleConsentRejection(senderId);
+      return;
+    }
+    
+    // Update the specific consent in database
+    await databaseModule.updateUserConsent(senderId, consentType, accepted);
+    
+    // Get updated consent status
+    const userConsent = await databaseModule.getUserConsent(senderId);
+    
+    // Determine next step based on consent type
+    switch (consentType) {
+      case 'consent':
+        if (accepted) {
+          await sendDataHandlingPolicy(senderId);
+        }
+        break;
+        
+      case 'data_handling':
+        if (accepted) {
+          await sendDataSharingPolicy(senderId);
+        }
+        break;
+        
+      case 'data_sharing':
+        if (accepted) {
+          await sendEULA(senderId);
+        }
+        break;
+        
+      case 'eula':
+        if (accepted) {
+          // Complete the consent flow
+          await databaseModule.completeUserConsent(senderId);
+          await completeConsentFlow(senderId);
+        }
+        break;
+        
+      default:
+        console.error('Unknown consent type:', consentType);
+        await sendConsentNotice(senderId);
+    }
+    
+  } catch (error) {
+    console.error('Error in handleConsentStep:', error);
+    await messengerModule.sendTextMessage(senderId, 
+      'Sorry, there was an error processing your consent. Please try again.');
+    await sendConsentNotice(senderId);
+  }
+}
+
+// Handle consent flow rejection
+async function handleConsentRejection(senderId) {
+  const rejectionText = `Thank you for your interest in KitaKits.\n\nSince you have not agreed to our data policies, we cannot provide our inventory management services at this time.\n\n🔒 Your privacy is important to us, and we respect your decision.\n\nIf you change your mind in the future, you can always restart the conversation by sending "hello" or "start".\n\nThank you for considering KitaKits!`;
+  
+  await messengerModule.sendTextMessage(senderId, rejectionText);
+}
+
+// Send welcome message for new users (now starts consent flow)
+async function sendWelcomeMessage(senderId) {
+  try {
+    // Initialize user consent record
+    await databaseModule.initializeUserConsent(senderId);
+    
+    // Check if user has already completed consent
+    const userConsent = await databaseModule.getUserConsent(senderId);
+    
+    if (userConsent && userConsent.all_policies_accepted) {
+      // User has already completed consent, go directly to main menu
+      const welcomeText = `🏪 Welcome back to KitaKits! \n\nYour inventory assistant is ready to help you manage your sari-sari store, carinderia, or small business.\n\n📱 I can help you with:\n• 📦 Inventory tracking\n• 💰 Sales recording\n• 📊 Business insights\n• 📸 Receipt scanning\n\nWhat would you like to do today?`;
+      
+      await messengerModule.sendTextMessage(senderId, welcomeText);
+      await sendMainMenu(senderId);
+    } else {
+      // New user or incomplete consent, start consent flow
+      await sendConsentNotice(senderId);
+    }
+  } catch (error) {
+    console.error('Error in sendWelcomeMessage:', error);
+    // Fallback to consent flow
+    await sendConsentNotice(senderId);
+  }
 }
 
 // Send main menu quick replies
 async function sendMainMenu(senderId) {
-  await messengerModule.sendQuickReplies(senderId, '🏪 Pumili ng aksyon:', [
-    { title: '📦 Add Item to Inventory', payload: 'ADD_ITEM_TO_INVENTORY' },
-    { title: '➕ Add Stock to Item', payload: 'ADD_STOCK_TO_ITEM' },
-    { title: '💰 Change Item Price', payload: 'CHANGE_ITEM_PRICE' },
-    { title: '📤 Item Sold', payload: 'ITEM_SOLD' },
-    { title: '📊 Summary', payload: 'SUMMARY' },
-    { title: '🧾 Read Receipt', payload: 'READ_RECEIPT' }
-  ]);
+  try {
+    // Check if user has completed consent before showing main menu
+    const userConsent = await databaseModule.getUserConsent(senderId);
+    
+    if (!userConsent || !userConsent.all_policies_accepted) {
+      // User hasn't completed consent, redirect to consent flow
+      await sendWelcomeMessage(senderId);
+      return;
+    }
+    
+    // User has completed consent, show main menu
+    await messengerModule.sendQuickReplies(senderId, '🏪 Pumili ng aksyon:', [
+      { title: '📦 Add Item to Inventory', payload: 'ADD_ITEM_TO_INVENTORY' },
+      { title: '➕ Add Stock to Item', payload: 'ADD_STOCK_TO_ITEM' },
+      { title: '💰 Change Item Price', payload: 'CHANGE_ITEM_PRICE' },
+      { title: '📤 Item Sold', payload: 'ITEM_SOLD' },
+      { title: '📊 Summary', payload: 'SUMMARY' },
+      { title: '🧾 Read Receipt', payload: 'READ_RECEIPT' }
+    ]);
+    
+  } catch (error) {
+    console.error('Error in sendMainMenu:', error);
+    // Fallback to consent flow if there's an error
+    await sendWelcomeMessage(senderId);
+  }
 }
 
 // Send help message

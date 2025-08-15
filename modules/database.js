@@ -116,6 +116,29 @@ function initializeDB() {
       if (err) console.error('Error creating sales_transactions table:', err);
       else console.log('Sales transactions table ready');
     });
+    
+    // User consent and policy acceptance table
+    db.run(`
+      CREATE TABLE IF NOT EXISTS user_consent (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        sender_id TEXT NOT NULL UNIQUE,
+        consent_given BOOLEAN DEFAULT 0,
+        data_handling_accepted BOOLEAN DEFAULT 0,
+        data_sharing_accepted BOOLEAN DEFAULT 0,
+        eula_accepted BOOLEAN DEFAULT 0,
+        all_policies_accepted BOOLEAN DEFAULT 0,
+        consent_date DATETIME,
+        data_handling_date DATETIME,
+        data_sharing_date DATETIME,
+        eula_date DATETIME,
+        completed_date DATETIME,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `, (err) => {
+      if (err) console.error('Error creating user_consent table:', err);
+      else console.log('User consent table ready');
+    });
   });
 }
 
@@ -695,6 +718,110 @@ function recordSaleById(senderId, itemId, quantitySold) {
   });
 }
 
+/**
+ * Get user consent status
+ */
+function getUserConsent(senderId) {
+  return new Promise((resolve, reject) => {
+    db.get(
+      `SELECT * FROM user_consent WHERE sender_id = ?`,
+      [senderId],
+      (err, row) => {
+        if (err) {
+          reject(err);
+        } else {
+          resolve(row);
+        }
+      }
+    );
+  });
+}
+
+/**
+ * Initialize user consent record
+ */
+function initializeUserConsent(senderId) {
+  return new Promise((resolve, reject) => {
+    db.run(
+      `INSERT OR IGNORE INTO user_consent (sender_id) VALUES (?)`,
+      [senderId],
+      function(err) {
+        if (err) {
+          reject(err);
+        } else {
+          resolve({ id: this.lastID || 'existing', senderId });
+        }
+      }
+    );
+  });
+}
+
+/**
+ * Update user consent step
+ */
+function updateUserConsent(senderId, step, accepted = true) {
+  return new Promise((resolve, reject) => {
+    let updateField, dateField;
+    
+    switch (step) {
+      case 'consent':
+        updateField = 'consent_given';
+        dateField = 'consent_date';
+        break;
+      case 'data_handling':
+        updateField = 'data_handling_accepted';
+        dateField = 'data_handling_date';
+        break;
+      case 'data_sharing':
+        updateField = 'data_sharing_accepted';
+        dateField = 'data_sharing_date';
+        break;
+      case 'eula':
+        updateField = 'eula_accepted';
+        dateField = 'eula_date';
+        break;
+      default:
+        reject(new Error('Invalid consent step'));
+        return;
+    }
+    
+    const query = `
+      UPDATE user_consent 
+      SET ${updateField} = ?, ${dateField} = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+      WHERE sender_id = ?
+    `;
+    
+    db.run(query, [accepted ? 1 : 0, senderId], function(err) {
+      if (err) {
+        reject(err);
+      } else {
+        resolve({ changes: this.changes });
+      }
+    });
+  });
+}
+
+/**
+ * Mark all policies as completed
+ */
+function completeUserConsent(senderId) {
+  return new Promise((resolve, reject) => {
+    db.run(
+      `UPDATE user_consent 
+       SET all_policies_accepted = 1, completed_date = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+       WHERE sender_id = ? AND consent_given = 1 AND data_handling_accepted = 1 AND data_sharing_accepted = 1 AND eula_accepted = 1`,
+      [senderId],
+      function(err) {
+        if (err) {
+          reject(err);
+        } else {
+          resolve({ completed: this.changes > 0 });
+        }
+      }
+    );
+  });
+}
+
 module.exports = {
   initializeDB,
   insertInteraction,
@@ -717,5 +844,10 @@ module.exports = {
   getSalesSummary,
   getExpiringItems,
   updateItemPrice,
-  addStockToItem
+  addStockToItem,
+  // Consent management functions
+  getUserConsent,
+  initializeUserConsent,
+  updateUserConsent,
+  completeUserConsent
 };
