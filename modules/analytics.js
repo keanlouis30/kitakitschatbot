@@ -661,12 +661,17 @@ async function generateGeographicAnalytics() {
     return geographicAnalytics;
   } catch (error) {
     console.error('Error generating geographic analytics:', error);
-    // Return sample data on error
+    // Return Metro Manila sample data on error
     return {
       userDistribution: [
-        { city: 'Metro Manila', region: 'NCR', country: 'Philippines', userCount: 245, coordinates: { latitude: 14.5995, longitude: 120.9842 } },
-        { city: 'Cebu City', region: 'Central Visayas', country: 'Philippines', userCount: 178, coordinates: { latitude: 10.3157, longitude: 123.8854 } },
-        { city: 'Davao City', region: 'Davao Region', country: 'Philippines', userCount: 134, coordinates: { latitude: 7.1907, longitude: 125.4553 } }
+        { city: 'Manila', region: 'NCR', country: 'Philippines', userCount: 145, coordinates: { latitude: 14.5995, longitude: 120.9842 } },
+        { city: 'Quezon City', region: 'NCR', country: 'Philippines', userCount: 178, coordinates: { latitude: 14.6760, longitude: 121.0437 } },
+        { city: 'Makati', region: 'NCR', country: 'Philippines', userCount: 92, coordinates: { latitude: 14.5547, longitude: 121.0244 } },
+        { city: 'Taguig', region: 'NCR', country: 'Philippines', userCount: 84, coordinates: { latitude: 14.5176, longitude: 121.0509 } },
+        { city: 'Pasig', region: 'NCR', country: 'Philippines', userCount: 67, coordinates: { latitude: 14.5764, longitude: 121.0851 } },
+        { city: 'Caloocan', region: 'NCR', country: 'Philippines', userCount: 58, coordinates: { latitude: 14.6580, longitude: 120.9660 } },
+        { city: 'Mandaluyong', region: 'NCR', country: 'Philippines', userCount: 43, coordinates: { latitude: 14.5794, longitude: 121.0359 } },
+        { city: 'Parañaque', region: 'NCR', country: 'Philippines', userCount: 39, coordinates: { latitude: 14.4793, longitude: 121.0198 } }
       ],
       purchasePatterns: [],
       hotSpots: []
