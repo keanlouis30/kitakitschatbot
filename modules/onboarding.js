@@ -110,19 +110,24 @@ async function setupInventoryUpload(senderId) {
   await storeOnboardingState(senderId, ONBOARDING_STATES.UPLOAD_INVENTORY);
   
   const instructionMessage = `📦 **Inventory Setup via Photo**\n\n` +
-    `Please upload a photo of your current inventory. This could be:\n\n` +
-    `📋 **Good photos to upload:**\n` +
-    `• Hand-written inventory list\n` +
-    `• Printed inventory sheets\n` +
-    `• Store receipt with items you stock\n` +
-    `• Product labels or price lists\n` +
-    `• Notebook with stock records\n\n` +
-    `📸 **Tips for best results:**\n` +
-    `• Take photo in good lighting\n` +
-    `• Keep text straight and clear\n` +
-    `• Include item names, quantities, and prices\n` +
+    `Please upload a photo of your current inventory list.\n\n` +
+    `📝 **For best results, format your written inventory like this:**\n` +
+    `\`\`\`\n` +
+    `Rice 45 20kg\n` +
+    `Coca Cola 15 24bottles\n` +
+    `Bread 25 10pcs\n` +
+    `Sugar 65 5kg\n` +
+    `\`\`\`\n\n` +
+    `📋 **Format: [item] [price] [quantity]**\n` +
+    `• Item name first\n` +
+    `• Price per unit (without ₱ symbol)\n` +
+    `• Quantity with unit (kg, pcs, bottles, etc.)\n\n` +
+    `📸 **Photo Tips:**\n` +
+    `• Good lighting, clear text\n` +
+    `• Write one item per line\n` +
+    `• Keep text straight and readable\n` +
     `• You can upload multiple photos\n\n` +
-    `Upload your first inventory photo now! 👇`;
+    `Upload your inventory photo now! 👇`;
   
   await messengerModule.sendTextMessage(senderId, instructionMessage);
 }
@@ -134,19 +139,25 @@ async function setupSalesUpload(senderId) {
   await storeOnboardingState(senderId, ONBOARDING_STATES.UPLOAD_SALES);
   
   const instructionMessage = `💰 **Sales Record Setup via Photo**\n\n` +
-    `Please upload a photo of your sales records. This could be:\n\n` +
-    `📋 **Good photos to upload:**\n` +
-    `• Today's sales notebook entries\n` +
-    `• Cash register receipts\n` +
-    `• Hand-written sales log\n` +
-    `• Customer receipts you've issued\n` +
-    `• Sales summary sheets\n\n` +
-    `📸 **Tips for best results:**\n` +
-    `• Clear, readable text\n` +
-    `• Good lighting\n` +
-    `• Include item names, quantities sold, and prices\n` +
+    `Please upload a photo of your sales records.\n\n` +
+    `📝 **For best results, format your sales record like this:**\n` +
+    `\`\`\`\n` +
+    `Sold Rice 45 2kg\n` +
+    `Sold Coca Cola 15 3bottles\n` +
+    `Sold Bread 25 1pcs\n` +
+    `Sold Sugar 65 1kg\n` +
+    `\`\`\`\n\n` +
+    `📋 **Format: Sold [item] [unit_price] [quantity]**\n` +
+    `• Start with "Sold" (optional)\n` +
+    `• Item name\n` +
+    `• Price per unit\n` +
+    `• Quantity sold with unit\n\n` +
+    `📸 **Photo Tips:**\n` +
+    `• Good lighting, clear handwriting\n` +
+    `• Write one sale per line\n` +
+    `• Include today's sales transactions\n` +
     `• Multiple photos are okay\n\n` +
-    `Upload your first sales photo now! 👇`;
+    `Upload your sales photo now! 👇`;
   
   await messengerModule.sendTextMessage(senderId, instructionMessage);
 }
@@ -404,27 +415,49 @@ function parseInventoryFromText(text) {
  * Parse individual inventory line
  */
 function parseInventoryLine(line) {
-  // Common patterns for inventory:
-  // "Rice 5kg - 10pcs @ P50 each"
-  // "Coca Cola 250ml x20 P15.00"
-  // "Bread loaf 15 @ 25.00"
-  // "Sugar 1kg - 5 units P65"
+  // Expected format: [item] [price] [quantity]
+  // Examples:
+  // "Rice 45 20kg"
+  // "Coca Cola 15 24bottles"
+  // "Bread 25 10pcs"
+  // "Sugar 65 5kg"
   
   const cleanLine = line.trim().replace(/[₱P]/g, '');
   
-  // Pattern: Item name + quantity + price
-  const patterns = [
+  // Primary pattern for [item] [price] [quantity] format
+  const primaryPattern = /^(.+?)\s+([\d.]+)\s+(\d+)\s*([a-zA-Z]+)\s*$/i;
+  const match = cleanLine.match(primaryPattern);
+  
+  if (match) {
+    const name = match[1].trim();
+    const price = parseFloat(match[2]) || 0;
+    const quantity = parseInt(match[3]) || 1;
+    const unit = match[4] || 'pcs';
+    
+    if (name && price > 0) {
+      return {
+        name: name,
+        quantity: quantity,
+        unit: unit,
+        price: price,
+        category: guessCategory(name)
+      };
+    }
+  }
+  
+  // Fallback patterns for other common formats
+  const fallbackPatterns = [
+    /^(.+?)\s+([\d.]+)\s*(?:pcs?|units?|kg|g|L|ml|bottles?|cans?|packs?)\s*([\d.]+)/i,
     /^(.+?)\s+(\d+)\s*(?:pcs?|units?|kg|g|L|ml|bottles?|cans?|packs?)\s*[@x-]?\s*([\d.]+)/i,
-    /^(.+?)\s*[-x@]\s*(\d+)\s*(?:pcs?|units?)?\s*[@x-]?\s*([\d.]+)/i,
-    /^(.+?)\s+([\d.]+)\s*(?:pcs?|units?|kg|g|L|ml|bottles?|cans?|packs?)\s*([\d.]+)/i
+    /^(.+?)\s*[-x@]\s*(\d+)\s*(?:pcs?|units?)?\s*[@x-]?\s*([\d.]+)/i
   ];
   
-  for (const pattern of patterns) {
-    const match = cleanLine.match(pattern);
-    if (match) {
-      const name = match[1].trim();
-      const quantity = parseInt(match[2]) || 1;
-      const price = parseFloat(match[3]) || 0;
+  for (const pattern of fallbackPatterns) {
+    const fallbackMatch = cleanLine.match(pattern);
+    if (fallbackMatch) {
+      const name = fallbackMatch[1].trim();
+      const quantity = parseInt(fallbackMatch[2]) || 1;
+      const price = parseFloat(fallbackMatch[3]) || 0;
       
       if (name && price > 0) {
         return {
