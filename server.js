@@ -12,12 +12,66 @@ const analyticsModule = require('./modules/analytics');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Session state management for user commands
+const userSessions = new Map();
+
+// Session state structure:
+// {
+//   action: 'stock_add' | 'price_change' | 'record_sale' | null,
+//   itemId: string | null,
+//   itemName: string | null,
+//   awaitingInput: 'quantity' | 'price' | null,
+//   timestamp: Date
+// }
+
 // Middleware
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
 // Initialize database on startup
 databaseModule.initializeDB();
+
+// Helper functions for session management
+function getUserSession(senderId) {
+  if (!userSessions.has(senderId)) {
+    userSessions.set(senderId, {
+      action: null,
+      itemId: null,
+      itemName: null,
+      awaitingInput: null,
+      timestamp: new Date()
+    });
+  }
+  return userSessions.get(senderId);
+}
+
+function setUserSession(senderId, sessionData) {
+  const currentSession = getUserSession(senderId);
+  const updatedSession = { 
+    ...currentSession, 
+    ...sessionData, 
+    timestamp: new Date() 
+  };
+  userSessions.set(senderId, updatedSession);
+  console.log(`[SESSION] User ${senderId}: ${JSON.stringify(updatedSession)}`);
+}
+
+function clearUserSession(senderId) {
+  userSessions.set(senderId, {
+    action: null,
+    itemId: null,
+    itemName: null,
+    awaitingInput: null,
+    timestamp: new Date()
+  });
+  console.log(`[SESSION] Cleared session for user ${senderId}`);
+}
+
+function isSessionExpired(session, maxAgeMinutes = 30) {
+  const now = new Date();
+  const sessionAge = (now - session.timestamp) / (1000 * 60);
+  return sessionAge > maxAgeMinutes;
+}
 
 // Single endpoint to handle all webhook requests
 app.post('/webhook', async (req, res) => {
@@ -182,15 +236,38 @@ async function handleImageMessage(senderId, imageUrl) {
 async function handleTextOrQuickReply(senderId, message) {
   const payload = message.quick_reply?.payload;
   const text = message.text?.toLowerCase();
+  const originalText = message.text;
   
   try {
-    // Handle quick reply actions
+    // Get current session state
+    const session = getUserSession(senderId);
+    
+    // Check if session is expired and clear if needed
+    if (session.action && isSessionExpired(session)) {
+      console.log(`[SESSION] Session expired for user ${senderId}, clearing...`);
+      clearUserSession(senderId);
+    }
+    
+    // Priority 1: Handle session-based numeric inputs
+    if (session.action && session.awaitingInput && originalText && /^\d+(\.\d+)?$/.test(originalText.trim())) {
+      const numericValue = parseFloat(originalText.trim());
+      
+      if (numericValue > 0) {
+        const success = await handleSessionBasedNumericInput(senderId, session, numericValue);
+        if (success) {
+          clearUserSession(senderId);
+          return;
+        }
+      }
+    }
+    
+    // Priority 2: Handle quick reply actions (these might set up sessions)
     if (payload) {
       await handleQuickReplyPayload(senderId, payload);
     }
-    // Handle text commands and greetings
+    // Priority 3: Handle text commands and greetings
     else if (text) {
-      await handleTextCommands(senderId, text, message.text);
+      await handleTextCommands(senderId, text, originalText);
     }
     // Default case
     else {
@@ -198,6 +275,7 @@ async function handleTextOrQuickReply(senderId, message) {
     }
   } catch (error) {
     console.error('Text/QuickReply handling error:', error);
+    clearUserSession(senderId); // Clear session on error
     await messengerModule.sendTextMessage(senderId, 'May error po. Subukan ulit.');
     await sendMainMenu(senderId);
   }
@@ -578,66 +656,132 @@ async function parseNumericInput(senderId, lowerText, originalText) {
     if (numericValue > 0) {
       // Get the user's last few interactions to understand context
       try {
-        const recentInteractions = await databaseModule.getUserInteractions(senderId, 10);
+        const recentInteractions = await databaseModule.getUserInteractions(senderId, 15);
         
         let contextFound = false;
         let recentItemName = null;
         let recentItemId = null;
         let actionType = null;
+        let contextInteraction = null;
+        
+        console.log(`[DEBUG] Analyzing ${recentInteractions.length} recent interactions for context`);
         
         // Analyze recent interactions to determine context and item
         for (let i = 0; i < recentInteractions.length; i++) {
           const interaction = recentInteractions[i];
           const content = interaction.content?.toLowerCase();
           
-          // Look for explicit action context (highest priority)
-          if (content?.includes('change price') || content?.includes('bagong price')) {
+          console.log(`[DEBUG] Interaction ${i}: "${content}"`);
+          
+          // Look for explicit quick reply payloads (HIGHEST PRIORITY)
+          if (content?.includes('change_price_')) {
             actionType = 'price_change';
-            const itemIdMatch = content.match(/(change_price_)(\d+)/);
+            const itemIdMatch = content.match(/change_price_(\d+)/);
             if (itemIdMatch) {
-              recentItemId = itemIdMatch[2];
+              recentItemId = itemIdMatch[1];
               contextFound = true;
+              contextInteraction = interaction;
+              console.log(`[DEBUG] Found price change context: itemId=${recentItemId}`);
               break;
             }
           }
           
-          else if (content?.includes('adding stock') || content?.includes('quantity na idadagdag')) {
+          else if (content?.includes('add_stock_')) {
             actionType = 'add_stock';
-            const itemIdMatch = content.match(/(add_stock_)(\d+)/);
+            const itemIdMatch = content.match(/add_stock_(\d+)/);
             if (itemIdMatch) {
-              recentItemId = itemIdMatch[2];
+              recentItemId = itemIdMatch[1];
               contextFound = true;
+              contextInteraction = interaction;
+              console.log(`[DEBUG] Found add stock context: itemId=${recentItemId}`);
               break;
             }
           }
           
-          else if (content?.includes('record sale') || content?.includes('quantity na nabenta')) {
+          else if (content?.includes('item_sold_')) {
             actionType = 'record_sale';
-            const itemIdMatch = content.match(/(item_sold_)(\d+)/);
+            const itemIdMatch = content.match(/item_sold_(\d+)/);
             if (itemIdMatch) {
-              recentItemId = itemIdMatch[2];
+              recentItemId = itemIdMatch[1];
               contextFound = true;
+              contextInteraction = interaction;
+              console.log(`[DEBUG] Found item sold context: itemId=${recentItemId}`);
               break;
             }
           }
           
-          // Look for stock check context (implies user wants to add stock)
-          else if (!contextFound && (content?.includes('stock:') || content?.includes('stock check') || 
-                   content?.includes('tira ng') || content?.includes('check '))) {
-            actionType = 'add_stock_from_check';
-            // Try to extract item name from stock check
+          // Look for contextual phrases (MEDIUM PRIORITY)
+          else if (content?.includes('i-type ang bagong price') || content?.includes('change price')) {
+            actionType = 'price_change';
+            // Try to find the most recent item ID from previous interactions
+            for (let j = i + 1; j < recentInteractions.length; j++) {
+              const prevContent = recentInteractions[j].content?.toLowerCase();
+              const itemIdMatch = prevContent?.match(/change_price_(\d+)/);
+              if (itemIdMatch) {
+                recentItemId = itemIdMatch[1];
+                contextFound = true;
+                contextInteraction = recentInteractions[j];
+                console.log(`[DEBUG] Found price change context from phrase: itemId=${recentItemId}`);
+                break;
+              }
+            }
+            if (contextFound) break;
+          }
+          
+          else if (content?.includes('i-type ang quantity na idadagdag') || content?.includes('adding stock')) {
+            actionType = 'add_stock';
+            // Try to find the most recent item ID from previous interactions
+            for (let j = i + 1; j < recentInteractions.length; j++) {
+              const prevContent = recentInteractions[j].content?.toLowerCase();
+              const itemIdMatch = prevContent?.match(/add_stock_(\d+)/);
+              if (itemIdMatch) {
+                recentItemId = itemIdMatch[1];
+                contextFound = true;
+                contextInteraction = recentInteractions[j];
+                console.log(`[DEBUG] Found add stock context from phrase: itemId=${recentItemId}`);
+                break;
+              }
+            }
+            if (contextFound) break;
+          }
+          
+          else if (content?.includes('i-type ang quantity na nabenta') || content?.includes('record sale')) {
+            actionType = 'record_sale';
+            // Try to find the most recent item ID from previous interactions
+            for (let j = i + 1; j < recentInteractions.length; j++) {
+              const prevContent = recentInteractions[j].content?.toLowerCase();
+              const itemIdMatch = prevContent?.match(/item_sold_(\d+)/);
+              if (itemIdMatch) {
+                recentItemId = itemIdMatch[1];
+                contextFound = true;
+                contextInteraction = recentInteractions[j];
+                console.log(`[DEBUG] Found record sale context from phrase: itemId=${recentItemId}`);
+                break;
+              }
+            }
+            if (contextFound) break;
+          }
+          
+          // Look for stock check context (LOW PRIORITY - implies user wants to add stock)
+          else if (!contextFound) {
+            // Enhanced stock check patterns
             const stockCheckPatterns = [
+              /^stock\s+([\w\s-]+)$/i,
+              /^check\s+([\w\s-]+)$/i,
+              /^tira\s+ng\s+([\w\s-]+)$/i,
+              /^([\w\s-]+)\s+stock$/i,
               /stock:\s*([\w\s-]+)/i,
-              /check\s+([\w\s-]+)/i,
-              /tira\s+ng\s+([\w\s-]+)/i,
-              /([\w\s-]+)\s+stock/i
+              /📦\s+([\w\s-]+)\s*\n/i  // From stock display responses
             ];
             
             for (const pattern of stockCheckPatterns) {
-              const itemMatch = content.match(pattern);
+              const itemMatch = content?.match(pattern);
               if (itemMatch) {
                 recentItemName = itemMatch[1].trim();
+                actionType = 'add_stock_from_check';
                 contextFound = true;
+                contextInteraction = interaction;
+                console.log(`[DEBUG] Found stock check context: itemName=${recentItemName}`);
                 break;
               }
             }
@@ -645,6 +789,8 @@ async function parseNumericInput(senderId, lowerText, originalText) {
             if (contextFound) break;
           }
         }
+        
+        console.log(`[DEBUG] Context analysis result: found=${contextFound}, type=${actionType}, itemId=${recentItemId}, itemName=${recentItemName}`);
         
         // Execute based on determined context
         if (contextFound) {
@@ -665,10 +811,23 @@ async function parseNumericInput(senderId, lowerText, originalText) {
           }
         }
         
-        // If no clear context found, provide helpful suggestions
-        await messengerModule.sendTextMessage(senderId,
-          `🔢 Nakita ko ang number "${numericValue}" pero hindi ko alam kung para saan ito.\n\nPara sa mas specific na action:\n• Use Quick Reply buttons\n• "Menu" para sa main options\n• Stock check → number = add stock\n• Price change → number = new price`);
+        // Enhanced fallback with more helpful context
+        console.log(`[DEBUG] No context found for numeric input: ${numericValue}`);
         
+        // Show recent interactions for debugging
+        let debugMessage = `🔢 Nakita ko ang number "${numericValue}" pero hindi ko alam kung para saan ito.\n\n`;
+        debugMessage += `📋 Recent actions:\n`;
+        
+        recentInteractions.slice(0, 3).forEach((interaction, index) => {
+          const content = interaction.content;
+          if (content && !content.includes(numericValue.toString())) {
+            debugMessage += `${index + 1}. ${content.substring(0, 30)}...\n`;
+          }
+        });
+        
+        debugMessage += `\n💡 Para sa mas specific na action:\n• Use Quick Reply buttons\n• "Menu" para sa main options\n• Stock check → number = add stock\n• Price change → number = new price`;
+        
+        await messengerModule.sendTextMessage(senderId, debugMessage);
         await sendMainMenu(senderId);
         return true;
         
@@ -997,7 +1156,7 @@ async function handleAddStockToItem(senderId) {
 async function handleAddStockSelected(senderId, itemId) {
   try {
     // Get the item details
-    const item = await databaseModule.getInventoryItem(senderId, '', itemId); // We need to modify this function to accept ID
+    const item = await databaseModule.getInventoryItemById(senderId, itemId);
     
     if (!item) {
       await messengerModule.sendTextMessage(senderId,
@@ -1006,11 +1165,16 @@ async function handleAddStockSelected(senderId, itemId) {
       return;
     }
     
-    // Store the selected item ID in a temporary way (we'll use text parsing)
+    // Set session state for command chaining
+    setUserSession(senderId, {
+      action: 'stock_add',
+      itemId: itemId,
+      itemName: item.item_name,
+      awaitingInput: 'quantity'
+    });
+    
     await messengerModule.sendTextMessage(senderId,
       `➕ *Adding Stock to: ${item.item_name}*\n\nCurrent Stock: ${item.quantity} ${item.unit}\nPrice: ₱${item.price} per ${item.unit}\n\n**I-type ang quantity na idadagdag:**\n\nExample: "5" (para mag-add ng 5 ${item.unit})\n\nNote: I-type lang ang number`);
-    
-    // We'll handle the response in text parsing by checking for numbers and matching with recent context
     
   } catch (error) {
     console.error('Add stock selected error:', error);
@@ -1056,9 +1220,26 @@ async function handleChangeItemPrice(senderId) {
 // Handle when user selects an item to change price
 async function handleChangePriceSelected(senderId, itemId) {
   try {
-    // Similar to add stock, we'll use text parsing to handle the price change
+    // Get the item details
+    const item = await databaseModule.getInventoryItemById(senderId, itemId);
+    
+    if (!item) {
+      await messengerModule.sendTextMessage(senderId,
+        '❌ Item not found. Returning to main menu.');
+      await sendMainMenu(senderId);
+      return;
+    }
+    
+    // Set session state for command chaining
+    setUserSession(senderId, {
+      action: 'price_change',
+      itemId: itemId,
+      itemName: item.item_name,
+      awaitingInput: 'price'
+    });
+    
     await messengerModule.sendTextMessage(senderId,
-      `💰 *Change Price*\n\n**I-type ang bagong price:**\n\nExample: "25" (para maging ₱25)\n"15.50" (para maging ₱15.50)\n\nNote: I-type lang ang number/amount`);
+      `💰 *Change Price for: ${item.item_name}*\n\nCurrent Price: ₱${item.price} per ${item.unit}\nStock: ${item.quantity} ${item.unit}\n\n**I-type ang bagong price:**\n\nExample: "25" (para maging ₱25)\n"15.50" (para maging ₱15.50)\n\nNote: I-type lang ang number/amount`);
     
   } catch (error) {
     console.error('Change price selected error:', error);
@@ -1104,8 +1285,26 @@ async function handleItemSold(senderId) {
 // Handle when user selects an item that was sold
 async function handleItemSoldSelected(senderId, itemId) {
   try {
+    // Get the item details
+    const item = await databaseModule.getInventoryItemById(senderId, itemId);
+    
+    if (!item) {
+      await messengerModule.sendTextMessage(senderId,
+        '❌ Item not found. Returning to main menu.');
+      await sendMainMenu(senderId);
+      return;
+    }
+    
+    // Set session state for command chaining
+    setUserSession(senderId, {
+      action: 'record_sale',
+      itemId: itemId,
+      itemName: item.item_name,
+      awaitingInput: 'quantity'
+    });
+    
     await messengerModule.sendTextMessage(senderId,
-      `📤 *Record Sale*\n\n**I-type ang quantity na nabenta:**\n\nExample: "3" (para sa 3 pieces)\n"2.5" (para sa 2.5 kg)\n\nNote: I-type lang ang number/amount`);
+      `📤 *Record Sale for: ${item.item_name}*\n\nCurrent Stock: ${item.quantity} ${item.unit}\nPrice: ₱${item.price} per ${item.unit}\n\n**I-type ang quantity na nabenta:**\n\nExample: "3" (para sa 3 ${item.unit})\n"2.5" (para sa 2.5 ${item.unit})\n\nNote: I-type lang ang number/amount`);
     
   } catch (error) {
     console.error('Item sold selected error:', error);
@@ -1113,6 +1312,72 @@ async function handleItemSoldSelected(senderId, itemId) {
       '❌ May error. Subukan ulit.');
     await sendMainMenu(senderId);
   }
+}
+
+// Handle session-based numeric inputs
+async function handleSessionBasedNumericInput(senderId, session, numericValue) {
+  console.log(`[SESSION] Handling numeric input: ${numericValue} for action: ${session.action}`);
+  
+  try {
+    switch (session.action) {
+      case 'stock_add':
+        if (session.itemId) {
+          const updatedItem = await databaseModule.addStockToItem(senderId, session.itemId, numericValue);
+          await messengerModule.sendTextMessage(senderId,
+            `✅ Stock added successfully!\n\n📦 ${updatedItem.item_name}\n➕ Added: ${numericValue} ${updatedItem.unit}\n📊 New Total Stock: ${updatedItem.quantity} ${updatedItem.unit}\n💰 Price: ₱${updatedItem.price} per ${updatedItem.unit}\n\n🎉 Stock updated!`);
+          await sendMainMenu(senderId);
+          return true;
+        }
+        break;
+        
+      case 'price_change':
+        if (session.itemId) {
+          const updatedItem = await databaseModule.updateItemPrice(senderId, session.itemId, numericValue);
+          await messengerModule.sendTextMessage(senderId,
+            `✅ Price updated successfully!\n\n📦 ${updatedItem.item_name}\n💰 New Price: ₱${numericValue}\n📊 Current Stock: ${updatedItem.quantity} ${updatedItem.unit}\n\n✨ Updated na ang price!`);
+          await sendMainMenu(senderId);
+          return true;
+        }
+        break;
+        
+      case 'record_sale':
+        if (session.itemId) {
+          const saleResult = await databaseModule.recordSaleById(senderId, session.itemId, numericValue);
+          await messengerModule.sendTextMessage(senderId,
+            `💰 Sale recorded successfully!\n\n📦 ${saleResult.itemName}\n🛒 Sold: ${numericValue} units\n💵 Unit Price: ₱${saleResult.unitPrice}\n💸 Total Amount: ₱${saleResult.totalAmount.toFixed(2)}\n\n📊 Remaining Stock: ${saleResult.remainingStock} units`);
+          
+          // Low stock warning
+          if (saleResult.remainingStock <= 5) {
+            await messengerModule.sendTextMessage(senderId,
+              `⚠️ LOW STOCK ALERT!\n\n📦 ${saleResult.itemName} = ${saleResult.remainingStock} units na lang\n\nTime to restock!`);
+          }
+          
+          await sendMainMenu(senderId);
+          return true;
+        }
+        break;
+        
+      default:
+        console.log(`[SESSION] Unknown action: ${session.action}`);
+        return false;
+    }
+    
+  } catch (error) {
+    console.error('[SESSION] Error handling numeric input:', error);
+    
+    if (error.message === 'Insufficient stock') {
+      await messengerModule.sendTextMessage(senderId,
+        `❌ Kulang ang stock! Hindi pwedeng mag-oversell.\n\nI-check muna ang available stock gamit ang "List" command.`);
+    } else {
+      await messengerModule.sendTextMessage(senderId,
+        `❌ May error sa pag-process ng ${numericValue}. Subukan ulit.`);
+    }
+    
+    await sendMainMenu(senderId);
+    return true;
+  }
+  
+  return false;
 }
 
 // Handle Read Receipt (placeholder)

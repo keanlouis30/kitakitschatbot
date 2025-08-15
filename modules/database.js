@@ -400,6 +400,13 @@ function getInventoryItem(senderId, itemName, itemId) {
 }
 
 /**
+ * Get inventory item by ID (wrapper function)
+ */
+function getInventoryItemById(senderId, itemId) {
+  return getInventoryItem(senderId, null, itemId);
+}
+
+/**
  * Search inventory items (partial match)
  */
 function searchInventoryItems(senderId, searchTerm) {
@@ -701,6 +708,7 @@ module.exports = {
   // Inventory management functions
   addInventoryItem,
   getInventoryItem,
+  getInventoryItemById,
   searchInventoryItems,
   getAllInventoryItems,
   recordSale,
