@@ -3,6 +3,68 @@ const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 
 /**
+ * Calculate total sales revenue and transaction metrics
+ */
+async function calculateSalesMetrics() {
+  try {
+    console.log('Calculating total sales metrics...');
+    
+    const DB_PATH = path.join(__dirname, '..', 'chatbot.db');
+    const db = new sqlite3.Database(DB_PATH);
+    
+    return new Promise((resolve, reject) => {
+      const query = `
+        SELECT 
+          COUNT(*) as totalTransactions,
+          SUM(total_amount) as totalRevenue,
+          AVG(total_amount) as avgTransactionValue,
+          COUNT(DISTINCT sender_id) as uniqueSellers,
+          COUNT(DISTINCT item_name) as uniqueProducts
+        FROM sales_transactions 
+        WHERE total_amount IS NOT NULL
+      `;
+      
+      db.get(query, [], (err, row) => {
+        if (err) {
+          console.error('Error calculating sales metrics:', err);
+          db.close();
+          resolve({
+            totalTransactions: 0,
+            totalRevenue: 0,
+            avgTransactionValue: 0,
+            uniqueSellers: 0,
+            uniqueProducts: 0
+          });
+          return;
+        }
+        
+        const metrics = {
+          totalTransactions: row.totalTransactions || 0,
+          totalRevenue: parseFloat(row.totalRevenue || 0),
+          avgTransactionValue: parseFloat(row.avgTransactionValue || 0),
+          uniqueSellers: row.uniqueSellers || 0,
+          uniqueProducts: row.uniqueProducts || 0
+        };
+        
+        db.close();
+        console.log(`Sales metrics calculated: ₱${metrics.totalRevenue} revenue from ${metrics.totalTransactions} transactions`);
+        resolve(metrics);
+      });
+    });
+    
+  } catch (error) {
+    console.error('Error calculating sales metrics:', error);
+    return {
+      totalTransactions: 0,
+      totalRevenue: 0,
+      avgTransactionValue: 0,
+      uniqueSellers: 0,
+      uniqueProducts: 0
+    };
+  }
+}
+
+/**
  * Generate top selling products from sales transactions data
  */
 async function generateTopSellingProducts(limit = 10) {
@@ -75,27 +137,61 @@ async function generateTopSellingProducts(limit = 10) {
 function categorizeProduct(itemName) {
   const name = itemName.toLowerCase();
   
+  // Beverages (expanded for better recognition)
+  if (name.includes('coke') || name.includes('coca-cola') || name.includes('sprite') || 
+      name.includes('pepsi') || name.includes('fanta') || name.includes('royal') ||
+      name.includes('water') || name.includes('juice') || name.includes('soda') || 
+      name.includes('coffee') || name.includes('tea') || name.includes('energy drink') ||
+      name.includes('beer') || name.includes('wine') || name.includes('liquor') ||
+      name.includes('milk tea') || name.includes('smoothie') || name.includes('shake')) {
+    return 'Beverages';
+  }
+  
   // Food categories
-  if (name.includes('rice') || name.includes('bread') || name.includes('pasta') || name.includes('noodle')) {
+  if (name.includes('rice') || name.includes('bread') || name.includes('pasta') || 
+      name.includes('noodle') || name.includes('cereal') || name.includes('oats')) {
     return 'Staples';
   }
-  if (name.includes('chicken') || name.includes('pork') || name.includes('beef') || name.includes('fish')) {
+  if (name.includes('chicken') || name.includes('pork') || name.includes('beef') || 
+      name.includes('fish') || name.includes('seafood') || name.includes('meat')) {
     return 'Meat & Seafood';
   }
-  if (name.includes('vegetable') || name.includes('fruit') || name.includes('tomato') || name.includes('onion')) {
+  if (name.includes('vegetable') || name.includes('fruit') || name.includes('tomato') || 
+      name.includes('onion') || name.includes('potato') || name.includes('carrot') ||
+      name.includes('banana') || name.includes('apple') || name.includes('orange')) {
     return 'Produce';
   }
-  if (name.includes('milk') || name.includes('cheese') || name.includes('yogurt') || name.includes('butter')) {
+  if (name.includes('milk') || name.includes('cheese') || name.includes('yogurt') || 
+      name.includes('butter') || name.includes('cream') || name.includes('dairy')) {
     return 'Dairy';
   }
-  if (name.includes('shampoo') || name.includes('soap') || name.includes('detergent') || name.includes('toothpaste')) {
+  
+  // Snacks and treats
+  if (name.includes('chips') || name.includes('biscuit') || name.includes('cookie') ||
+      name.includes('candy') || name.includes('chocolate') || name.includes('ice cream') ||
+      name.includes('snack') || name.includes('crackers')) {
+    return 'Snacks & Treats';
+  }
+  
+  // Personal care
+  if (name.includes('shampoo') || name.includes('soap') || name.includes('detergent') || 
+      name.includes('toothpaste') || name.includes('deodorant') || name.includes('lotion') ||
+      name.includes('perfume') || name.includes('cosmetic')) {
     return 'Personal Care';
   }
-  if (name.includes('medicine') || name.includes('vitamin') || name.includes('tablet') || name.includes('capsule')) {
+  
+  // Health and medicine
+  if (name.includes('medicine') || name.includes('vitamin') || name.includes('tablet') || 
+      name.includes('capsule') || name.includes('syrup') || name.includes('antibiotic') ||
+      name.includes('painkiller') || name.includes('supplement')) {
     return 'Health & Medicine';
   }
-  if (name.includes('water') || name.includes('juice') || name.includes('soda') || name.includes('coffee')) {
-    return 'Beverages';
+  
+  // Household items
+  if (name.includes('tissue') || name.includes('paper') || name.includes('bag') ||
+      name.includes('candle') || name.includes('battery') || name.includes('light bulb') ||
+      name.includes('cleaning')) {
+    return 'Household Items';
   }
   
   // Default category
@@ -843,6 +939,9 @@ async function generateEconomicActivity() {
   try {
     console.log('Generating economic activity analysis...');
     
+    // Get overall sales metrics first
+    const salesMetrics = await calculateSalesMetrics();
+    
     const popularItemsByArea = await databaseModule.getPopularItemsByArea();
     
     // Group by location and analyze economic patterns
@@ -871,25 +970,38 @@ async function generateEconomicActivity() {
       locationEconomics[locationKey].totalTransactions += item.purchase_frequency;
     });
     
+    // Calculate regional economics with enhanced metrics
+    const regionalEconomics = Object.values(locationEconomics).map(region => ({
+      ...region,
+      topItems: region.items.sort((a, b) => b.popularityScore - a.popularityScore).slice(0, 5),
+      economicIndicators: {
+        avgRevenuePerTransaction: region.totalTransactions > 0 ? region.totalRevenue / region.totalTransactions : 0,
+        marketDiversity: region.items.length,
+        economicStrength: region.totalRevenue * Math.log(region.items.length + 1) // Adjusted for diversity
+      }
+    }));
+    
+    // Calculate overall metrics using real sales data when available
+    const totalLocationRevenue = Object.values(locationEconomics).reduce((sum, region) => sum + region.totalRevenue, 0);
+    const totalEconomicValue = salesMetrics.totalRevenue > 0 ? salesMetrics.totalRevenue : totalLocationRevenue;
+    
     const economicActivity = {
-      regionalEconomics: Object.values(locationEconomics).map(region => ({
-        ...region,
-        topItems: region.items.sort((a, b) => b.popularityScore - a.popularityScore).slice(0, 5),
-        economicIndicators: {
-          avgRevenuePerTransaction: region.totalTransactions > 0 ? region.totalRevenue / region.totalTransactions : 0,
-          marketDiversity: region.items.length,
-          economicStrength: region.totalRevenue * Math.log(region.items.length + 1) // Adjusted for diversity
-        }
-      })),
+      regionalEconomics,
       
       overallMetrics: {
         totalMarkets: Object.keys(locationEconomics).length,
-        totalEconomicValue: Object.values(locationEconomics).reduce((sum, region) => sum + region.totalRevenue, 0),
+        totalEconomicValue: totalEconomicValue,
+        totalRevenue: salesMetrics.totalRevenue, // NEW: Direct total revenue field
+        totalTransactions: salesMetrics.totalTransactions, // NEW: Total transactions count
+        avgTransactionValue: salesMetrics.avgTransactionValue, // NEW: Average transaction value
+        uniqueProducts: salesMetrics.uniqueProducts, // NEW: Number of unique products sold
         mostActiveMarket: Object.values(locationEconomics).sort((a, b) => b.totalRevenue - a.totalRevenue)[0]?.location || null,
         avgMarketValue: Object.keys(locationEconomics).length > 0 ?
           Object.values(locationEconomics).reduce((sum, region) => sum + region.totalRevenue, 0) / Object.keys(locationEconomics).length : 0
       }
     };
+    
+    console.log(`Economic activity generated: ₱${totalEconomicValue} total economic value from ${salesMetrics.totalTransactions} transactions`);
     
     return economicActivity;
   } catch (error) {
@@ -899,6 +1011,10 @@ async function generateEconomicActivity() {
       overallMetrics: {
         totalMarkets: 0,
         totalEconomicValue: 0,
+        totalRevenue: 0,
+        totalTransactions: 0,
+        avgTransactionValue: 0,
+        uniqueProducts: 0,
         mostActiveMarket: null,
         avgMarketValue: 0
       }
@@ -1461,6 +1577,9 @@ async function generateLegacyCompatibleAnalytics(filters = {}) {
     const categories = await categorizeData();
     const demographics = await analyzeDemographics();
     
+    // Get sales metrics for enhanced insights
+    const salesMetrics = await calculateSalesMetrics();
+    
     // Create backward-compatible response
     const legacyFormat = {
       // Legacy metadata format
@@ -1516,7 +1635,21 @@ async function generateLegacyCompatibleAnalytics(filters = {}) {
       },
       
       // NEW: Add trending products data that frontend expects
-      trendingProducts: await generateTopSellingProducts()
+      trendingProducts: await generateTopSellingProducts(),
+      
+      // NEW: Add sales summary for easy access to key sales metrics
+      salesSummary: {
+        totalRevenue: salesMetrics.totalRevenue,
+        totalTransactions: salesMetrics.totalTransactions,
+        avgTransactionValue: parseFloat(salesMetrics.avgTransactionValue.toFixed(2)),
+        uniqueProducts: salesMetrics.uniqueProducts,
+        uniqueSellers: salesMetrics.uniqueSellers,
+        performance: {
+          revenueFormatted: `₱${salesMetrics.totalRevenue.toFixed(2)}`,
+          status: salesMetrics.totalRevenue > 0 ? 'Active' : 'No Sales',
+          lastUpdated: new Date().toISOString()
+        }
+      }
     };
     
     return legacyFormat;
