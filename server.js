@@ -30,12 +30,19 @@ app.post('/webhook', async (req, res) => {
     }
     
     // Process incoming messages
-    if (body.object === 'page' && body.entry) {
+    if (body.object === 'page' && body.entry && Array.isArray(body.entry)) {
       for (const entry of body.entry) {
-        for (const event of entry.messaging) {
-          await handleMessage(event);
+        if (entry.messaging && Array.isArray(entry.messaging)) {
+          for (const event of entry.messaging) {
+            // Only process message events, skip delivery/read receipts
+            if (event && (event.message || event.postback)) {
+              await handleMessage(event);
+            }
+          }
         }
       }
+    } else {
+      console.log('Non-message webhook event:', JSON.stringify(body, null, 2));
     }
     
     res.status(200).send('EVENT_RECEIVED');
@@ -75,30 +82,55 @@ app.get('/analytics', async (req, res) => {
 
 // Handle incoming messages
 async function handleMessage(event) {
+  // Validate event structure
+  if (!event || !event.sender || !event.sender.id) {
+    console.log('Invalid event structure:', JSON.stringify(event, null, 2));
+    return;
+  }
+
   const senderId = event.sender.id;
   const message = event.message;
+  
+  // Skip if no message (could be delivery receipt, read receipt, etc.)
+  if (!message) {
+    console.log('No message in event, skipping:', JSON.stringify(event, null, 2));
+    return;
+  }
   
   try {
     // Store interaction in database
     await databaseModule.insertInteraction({
       senderId,
-      messageType: message.attachments ? 'image' : 'text',
-      content: message.text || 'image',
+      messageType: (message.attachments && message.attachments.length > 0) ? 'image' : 'text',
+      content: message.text || message.quick_reply?.title || 'image',
       timestamp: new Date().toISOString()
     });
     
     // Handle image with OCR (receipts, invoices, inventory photos)
-    if (message.attachments && message.attachments[0].type === 'image') {
+    if (message.attachments && message.attachments.length > 0 && message.attachments[0].type === 'image') {
       await handleImageMessage(senderId, message.attachments[0].payload.url);
     }
     // Handle text messages and quick reply responses
     else if (message.text || message.quick_reply) {
       await handleTextOrQuickReply(senderId, message);
     }
+    // Handle other message types (stickers, etc.)
+    else {
+      console.log('Unsupported message type:', JSON.stringify(message, null, 2));
+      await sendWelcomeMessage(senderId);
+    }
   } catch (error) {
     console.error('Message handling error:', error);
-    await messengerModule.sendTextMessage(senderId, 'Sorry, may error po. Subukan ulit. 😊');
-    await sendMainMenu(senderId);
+    console.error('Event that caused error:', JSON.stringify(event, null, 2));
+    
+    // Don't send error messages for quick reply responses to prevent loops
+    if (!message.quick_reply) {
+      try {
+        await messengerModule.sendTextMessage(senderId, 'Sorry, may problema sa system. Subukan ulit mamaya.');
+      } catch (sendError) {
+        console.error('Failed to send error message:', sendError);
+      }
+    }
   }
 }
 
