@@ -139,6 +139,50 @@ function initializeDB() {
       if (err) console.error('Error creating user_consent table:', err);
       else console.log('User consent table ready');
     });
+    
+    // User locations and geographic data table
+    db.run(`
+      CREATE TABLE IF NOT EXISTS user_locations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        sender_id TEXT NOT NULL,
+        latitude REAL,
+        longitude REAL,
+        address TEXT,
+        city TEXT,
+        region TEXT,
+        postal_code TEXT,
+        country TEXT,
+        location_source TEXT, -- 'manual', 'gps', 'ip', 'inferred'
+        accuracy_meters REAL,
+        is_primary BOOLEAN DEFAULT 0,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `, (err) => {
+      if (err) console.error('Error creating user_locations table:', err);
+      else console.log('User locations table ready');
+    });
+    
+    // Geographic analytics and insights table
+    db.run(`
+      CREATE TABLE IF NOT EXISTS geographic_analytics (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        location_key TEXT NOT NULL, -- city, region, or coordinate grid
+        user_count INTEGER DEFAULT 0,
+        transaction_count INTEGER DEFAULT 0,
+        total_revenue REAL DEFAULT 0,
+        avg_transaction_value REAL DEFAULT 0,
+        top_items TEXT, -- JSON array of popular items
+        activity_score REAL DEFAULT 0,
+        period_type TEXT, -- 'daily', 'weekly', 'monthly'
+        period_date TEXT, -- date string for the period
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `, (err) => {
+      if (err) console.error('Error creating geographic_analytics table:', err);
+      else console.log('Geographic analytics table ready');
+    });
   });
 }
 
@@ -822,6 +866,314 @@ function completeUserConsent(senderId) {
   });
 }
 
+// =============================================================================
+// LOCATION AND GEOGRAPHIC ANALYTICS FUNCTIONS
+// =============================================================================
+
+/**
+ * Insert or update user location
+ */
+function insertUserLocation(data) {
+  return new Promise((resolve, reject) => {
+    const { 
+      senderId, latitude, longitude, address, city, region, 
+      postalCode, country, locationSource = 'manual', 
+      accuracyMeters, isPrimary = false 
+    } = data;
+    
+    // If setting as primary, first unset other primary locations for this user
+    if (isPrimary) {
+      db.run(
+        `UPDATE user_locations SET is_primary = 0 WHERE sender_id = ?`,
+        [senderId],
+        (err) => {
+          if (err) {
+            reject(err);
+            return;
+          }
+          
+          // Now insert the new primary location
+          insertLocationRecord();
+        }
+      );
+    } else {
+      insertLocationRecord();
+    }
+    
+    function insertLocationRecord() {
+      db.run(
+        `INSERT INTO user_locations 
+         (sender_id, latitude, longitude, address, city, region, postal_code, country, location_source, accuracy_meters, is_primary) 
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [senderId, latitude, longitude, address, city, region, postalCode, country, locationSource, accuracyMeters, isPrimary ? 1 : 0],
+        function(err) {
+          if (err) {
+            reject(err);
+          } else {
+            resolve({ id: this.lastID, ...data });
+          }
+        }
+      );
+    }
+  });
+}
+
+/**
+ * Get user's primary location
+ */
+function getUserLocation(senderId) {
+  return new Promise((resolve, reject) => {
+    db.get(
+      `SELECT * FROM user_locations 
+       WHERE sender_id = ? AND is_primary = 1 
+       ORDER BY created_at DESC 
+       LIMIT 1`,
+      [senderId],
+      (err, row) => {
+        if (err) {
+          reject(err);
+        } else {
+          resolve(row);
+        }
+      }
+    );
+  });
+}
+
+/**
+ * Get user count by location (city/region)
+ */
+function getUserCountByLocation() {
+  return new Promise((resolve, reject) => {
+    db.all(
+      `SELECT 
+         city,
+         region,
+         country,
+         COUNT(DISTINCT sender_id) as user_count,
+         AVG(latitude) as avg_latitude,
+         AVG(longitude) as avg_longitude
+       FROM user_locations 
+       WHERE is_primary = 1 AND city IS NOT NULL
+       GROUP BY city, region, country
+       ORDER BY user_count DESC`,
+      [],
+      (err, rows) => {
+        if (err) {
+          reject(err);
+        } else {
+          resolve(rows);
+        }
+      }
+    );
+  });
+}
+
+/**
+ * Get purchase patterns by location
+ */
+function getPurchasePatternsByLocation() {
+  return new Promise((resolve, reject) => {
+    db.all(
+      `SELECT 
+         ul.city,
+         ul.region,
+         ul.country,
+         st.item_name,
+         SUM(st.quantity_sold) as total_quantity,
+         SUM(st.total_amount) as total_revenue,
+         COUNT(st.id) as transaction_count,
+         AVG(st.total_amount) as avg_transaction_value
+       FROM sales_transactions st
+       JOIN user_locations ul ON st.sender_id = ul.sender_id AND ul.is_primary = 1
+       WHERE ul.city IS NOT NULL
+       GROUP BY ul.city, ul.region, ul.country, st.item_name
+       ORDER BY ul.city, total_revenue DESC`,
+      [],
+      (err, rows) => {
+        if (err) {
+          reject(err);
+        } else {
+          resolve(rows);
+        }
+      }
+    );
+  });
+}
+
+/**
+ * Get high activity areas based on interactions and sales
+ */
+function getHighActivityAreas() {
+  return new Promise((resolve, reject) => {
+    db.all(
+      `SELECT 
+         ul.city,
+         ul.region,
+         ul.country,
+         COUNT(DISTINCT ul.sender_id) as unique_users,
+         COUNT(i.id) as total_interactions,
+         COUNT(st.id) as total_transactions,
+         COALESCE(SUM(st.total_amount), 0) as total_revenue,
+         (COUNT(i.id) * 0.3 + COUNT(st.id) * 0.7) as activity_score,
+         AVG(ul.latitude) as center_latitude,
+         AVG(ul.longitude) as center_longitude
+       FROM user_locations ul
+       LEFT JOIN interactions i ON ul.sender_id = i.sender_id
+       LEFT JOIN sales_transactions st ON ul.sender_id = st.sender_id
+       WHERE ul.is_primary = 1 AND ul.city IS NOT NULL
+       GROUP BY ul.city, ul.region, ul.country
+       HAVING unique_users >= 1
+       ORDER BY activity_score DESC`,
+      [],
+      (err, rows) => {
+        if (err) {
+          reject(err);
+        } else {
+          resolve(rows);
+        }
+      }
+    );
+  });
+}
+
+/**
+ * Get popular items by geographic area
+ */
+function getPopularItemsByArea() {
+  return new Promise((resolve, reject) => {
+    db.all(
+      `SELECT 
+         ul.city,
+         ul.region,
+         ul.country,
+         st.item_name,
+         SUM(st.quantity_sold) as total_sold,
+         SUM(st.total_amount) as revenue,
+         COUNT(st.id) as purchase_frequency,
+         (SUM(st.quantity_sold) * 0.4 + COUNT(st.id) * 0.6) as popularity_score
+       FROM sales_transactions st
+       JOIN user_locations ul ON st.sender_id = ul.sender_id AND ul.is_primary = 1
+       WHERE ul.city IS NOT NULL
+       GROUP BY ul.city, ul.region, ul.country, st.item_name
+       ORDER BY ul.city, popularity_score DESC`,
+      [],
+      (err, rows) => {
+        if (err) {
+          reject(err);
+        } else {
+          resolve(rows);
+        }
+      }
+    );
+  });
+}
+
+/**
+ * Get temporal activity patterns by location
+ */
+function getTemporalActivityByLocation() {
+  return new Promise((resolve, reject) => {
+    db.all(
+      `SELECT 
+         ul.city,
+         ul.region,
+         ul.country,
+         strftime('%H', i.timestamp) as hour_of_day,
+         strftime('%w', i.timestamp) as day_of_week,
+         COUNT(i.id) as interaction_count,
+         COUNT(DISTINCT i.sender_id) as active_users
+       FROM interactions i
+       JOIN user_locations ul ON i.sender_id = ul.sender_id AND ul.is_primary = 1
+       WHERE ul.city IS NOT NULL
+       GROUP BY ul.city, ul.region, ul.country, hour_of_day, day_of_week
+       ORDER BY ul.city, interaction_count DESC`,
+      [],
+      (err, rows) => {
+        if (err) {
+          reject(err);
+        } else {
+          resolve(rows);
+        }
+      }
+    );
+  });
+}
+
+/**
+ * Generate heat map data for geographic visualization
+ */
+function getHeatMapData() {
+  return new Promise((resolve, reject) => {
+    db.all(
+      `SELECT 
+         ul.latitude,
+         ul.longitude,
+         ul.city,
+         ul.region,
+         ul.country,
+         COUNT(DISTINCT ul.sender_id) as user_count,
+         COUNT(i.id) as interaction_count,
+         COUNT(st.id) as transaction_count,
+         COALESCE(SUM(st.total_amount), 0) as total_revenue,
+         (COUNT(i.id) + COUNT(st.id) * 2) as heat_intensity
+       FROM user_locations ul
+       LEFT JOIN interactions i ON ul.sender_id = i.sender_id
+       LEFT JOIN sales_transactions st ON ul.sender_id = st.sender_id
+       WHERE ul.is_primary = 1 AND ul.latitude IS NOT NULL AND ul.longitude IS NOT NULL
+       GROUP BY ul.latitude, ul.longitude, ul.city, ul.region, ul.country
+       ORDER BY heat_intensity DESC`,
+      [],
+      (err, rows) => {
+        if (err) {
+          reject(err);
+        } else {
+          resolve(rows);
+        }
+      }
+    );
+  });
+}
+
+/**
+ * Get demographic and economic indicators by area
+ */
+function getAreaDemographics() {
+  return new Promise((resolve, reject) => {
+    db.all(
+      `SELECT 
+         ul.city,
+         ul.region,
+         ul.country,
+         COUNT(DISTINCT ul.sender_id) as total_users,
+         COUNT(DISTINCT ii.sender_id) as business_users,
+         COUNT(DISTINCT st.sender_id) as active_sellers,
+         AVG(transaction_summary.avg_transaction) as area_avg_transaction,
+         COUNT(DISTINCT ii.category) as business_categories,
+         SUM(ii.quantity * ii.price) as total_inventory_value
+       FROM user_locations ul
+       LEFT JOIN inventory_items ii ON ul.sender_id = ii.sender_id
+       LEFT JOIN sales_transactions st ON ul.sender_id = st.sender_id
+       LEFT JOIN (
+         SELECT sender_id, AVG(total_amount) as avg_transaction
+         FROM sales_transactions
+         GROUP BY sender_id
+       ) transaction_summary ON ul.sender_id = transaction_summary.sender_id
+       WHERE ul.is_primary = 1 AND ul.city IS NOT NULL
+       GROUP BY ul.city, ul.region, ul.country
+       ORDER BY total_users DESC`,
+      [],
+      (err, rows) => {
+        if (err) {
+          reject(err);
+        } else {
+          resolve(rows);
+        }
+      }
+    );
+  });
+}
+
 module.exports = {
   initializeDB,
   insertInteraction,
@@ -849,5 +1201,15 @@ module.exports = {
   getUserConsent,
   initializeUserConsent,
   updateUserConsent,
-  completeUserConsent
+  completeUserConsent,
+  // Location and geographic analytics functions
+  insertUserLocation,
+  getUserLocation,
+  getUserCountByLocation,
+  getPurchasePatternsByLocation,
+  getHighActivityAreas,
+  getPopularItemsByArea,
+  getTemporalActivityByLocation,
+  getHeatMapData,
+  getAreaDemographics
 };

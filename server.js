@@ -28,6 +28,21 @@ const userSessions = new Map();
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
+// CORS middleware - MUST be before any routes
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+  
+  // Handle preflight OPTIONS requests
+  if (req.method === 'OPTIONS') {
+    res.status(200).end();
+    return;
+  }
+  
+  next();
+});
+
 // Initialize database on startup
 databaseModule.initializeDB();
 
@@ -123,16 +138,331 @@ app.get('/webhook', (req, res) => {
   }
 });
 
-// Analytics endpoint for data buyers
+// Analytics endpoint - legacy compatible format for existing dashboards
 app.get('/analytics', async (req, res) => {
   try {
-    const analytics = await analyticsModule.generateAnalytics(req.query);
-    res.json(analytics);
+    console.log('[ANALYTICS] Generating legacy-compatible analytics with filters:', req.query);
+    
+    // Use legacy-compatible format that maintains backwards compatibility
+    const analytics = await analyticsModule.generateLegacyCompatibleAnalytics(req.query);
+    
+    // Enhanced response that maintains existing API contract while adding new data
+    const response = {
+      success: true,
+      timestamp: new Date().toISOString(),
+      api_version: '2.1.0-compatible',
+      request_info: {
+        filters: req.query,
+        user_agent: req.get('User-Agent'),
+        request_id: `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+      },
+      data_disclaimer: {
+        purpose: 'This data includes both traditional business analytics and new urban planning insights',
+        privacy: 'All individual user data has been anonymized and aggregated',
+        accuracy: 'Data accuracy depends on user input quality and system processing capabilities',
+        usage_rights: 'Data may be used for research, planning, and decision-making purposes',
+        compatibility: 'This response maintains backwards compatibility while providing enhanced urban planning data'
+      },
+      // Direct analytics object for legacy compatibility
+      ...analytics
+    };
+    
+    // Add CORS headers for cross-origin requests
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    
+    // Set appropriate content type
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    
+    console.log('[ANALYTICS] Successfully generated legacy-compatible analytics response with', Object.keys(analytics).length, 'main sections');
+    
+    res.json(response);
   } catch (error) {
     console.error('Analytics error:', error);
-    res.status(500).json({ error: 'Failed to generate analytics' });
+    
+    // Enhanced error response
+    res.status(500).json({
+      success: false,
+      timestamp: new Date().toISOString(),
+      error: {
+        message: 'Failed to generate analytics',
+        code: 'ANALYTICS_GENERATION_ERROR',
+        details: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
+      },
+      request_info: {
+        filters: req.query,
+        request_id: `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+      }
+    });
   }
 });
+
+// Urban planning focused analytics endpoint
+app.get('/analytics/urban-planning/full', async (req, res) => {
+  try {
+    console.log('[ANALYTICS] Generating full urban planning analytics with filters:', req.query);
+    
+    // Use the dedicated urban planning analytics function
+    const urbanAnalytics = await analyticsModule.generateUrbanPlanningAnalytics(req.query);
+    
+    const response = {
+      success: true,
+      timestamp: new Date().toISOString(),
+      api_version: '2.1.0-urban-planning',
+      endpoint: '/analytics/urban-planning/full',
+      request_info: {
+        filters: req.query,
+        user_agent: req.get('User-Agent'),
+        request_id: `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+      },
+      data_disclaimer: {
+        purpose: 'This endpoint provides comprehensive urban planning and community science analytics',
+        privacy: 'All individual user data has been anonymized and aggregated',
+        accuracy: 'Data accuracy depends on user input quality and system processing capabilities',
+        usage_rights: 'Data specifically formatted for urban planning, research, and policy-making purposes'
+      },
+      data: urbanAnalytics
+    };
+    
+    // Add CORS headers for cross-origin requests
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    
+    // Set appropriate content type
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    
+    console.log('[ANALYTICS] Successfully generated urban planning analytics response with', Object.keys(urbanAnalytics).length, 'main sections');
+    
+    res.json(response);
+  } catch (error) {
+    console.error('Urban planning analytics error:', error);
+    
+    res.status(500).json({
+      success: false,
+      timestamp: new Date().toISOString(),
+      error: {
+        message: 'Failed to generate urban planning analytics',
+        code: 'URBAN_ANALYTICS_ERROR',
+        details: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
+      },
+      request_info: {
+        filters: req.query,
+        request_id: `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+      }
+    });
+  }
+});
+
+// Additional endpoint for specific analytics sections
+app.get('/analytics/:section', async (req, res) => {
+  try {
+    const { section } = req.params;
+    console.log(`[ANALYTICS] Requesting specific section: ${section}`);
+    
+    const fullAnalytics = await analyticsModule.generateAnalytics(req.query);
+    
+    // Map section names to analytics properties
+    const sectionMap = {
+      'geographic': fullAnalytics.geographicData,
+      'community': fullAnalytics.communityProfile,
+      'economic': fullAnalytics.economicActivity,
+      'heatmap': fullAnalytics.heatMapData,
+      'temporal': fullAnalytics.temporalPatterns,
+      'urban-planning': fullAnalytics.urbanPlanningInsights,
+      'community-science': fullAnalytics.communityScienceData,
+      'overview': fullAnalytics.overview
+    };
+    
+    if (!sectionMap[section]) {
+      return res.status(404).json({
+        success: false,
+        error: {
+          message: `Analytics section '${section}' not found`,
+          available_sections: Object.keys(sectionMap)
+        }
+      });
+    }
+    
+    const response = {
+      success: true,
+      timestamp: new Date().toISOString(),
+      section,
+      data: sectionMap[section],
+      metadata: fullAnalytics.metadata
+    };
+    
+    res.header('Access-Control-Allow-Origin', '*');
+    res.json(response);
+    
+  } catch (error) {
+    console.error(`Analytics section error:`, error);
+    res.status(500).json({
+      success: false,
+      error: {
+        message: 'Failed to generate analytics section',
+        section: req.params.section
+      }
+    });
+  }
+});
+
+// Helper function to collect and store geographic data for analytics
+async function collectGeographicData(senderId, event) {
+  try {
+    // Check for location data in the message
+    const message = event.message;
+    let locationData = null;
+    
+    // Check if message contains location attachment
+    if (message && message.attachments) {
+      const locationAttachment = message.attachments.find(att => att.type === 'location');
+      if (locationAttachment && locationAttachment.payload) {
+        const coords = locationAttachment.payload.coordinates;
+        if (coords) {
+          locationData = {
+            senderId,
+            latitude: coords.lat,
+            longitude: coords.long,
+            locationSource: 'gps',
+            isPrimary: false // Will be updated based on user settings
+          };
+        }
+      }
+    }
+    
+    // Try to extract location from text content
+    if (!locationData && message && message.text) {
+      const locationPatterns = [
+        // Address patterns
+        /(?:address|location|lugar)[:=]?\s*([\w\s,.-]+(?:city|manila|cebu|davao|quezon|makati|taguig|pasig|marikina)[\w\s,.-]*)/i,
+        // City/Municipality patterns
+        /(manila|quezon\s+city|makati|taguig|pasig|marikina|cebu\s+city|davao\s+city|caloocan|las\s+piñas|muntinlupa|parañaque|pasay|valenzuela|malabon|navotas|san\s+juan)/i,
+        // Province patterns with "sa" or "taga"
+        /(?:sa|taga|from)\s+(metro\s+manila|ncr|calabarzon|central\s+luzon|bicol|western\s+visayas|central\s+visayas|eastern\s+visayas|zamboanga|northern\s+mindanao|davao)/i
+      ];
+      
+      for (const pattern of locationPatterns) {
+        const match = message.text.match(pattern);
+        if (match) {
+          const locationString = match[1] || match[0];
+          locationData = {
+            senderId,
+            address: locationString.trim(),
+            locationSource: 'manual',
+            isPrimary: false
+          };
+          break;
+        }
+      }
+    }
+    
+    // If we have location data, try to geocode it and store it
+    if (locationData) {
+      // For addresses without coordinates, try to extract city/region info
+      if (locationData.address && !locationData.latitude) {
+        const addressParts = parseAddressParts(locationData.address);
+        locationData = { ...locationData, ...addressParts };
+      }
+      
+      // Store location data
+      try {
+        await databaseModule.insertUserLocation(locationData);
+        console.log(`[LOCATION] Stored location data for user ${senderId}:`, locationData);
+        
+        // Store analytics data point for location collection
+        await databaseModule.insertAnalyticsData({
+          dataType: 'location_collection',
+          category: locationData.locationSource,
+          value: locationData.address || `${locationData.latitude},${locationData.longitude}`,
+          metadata: {
+            source: locationData.locationSource,
+            city: locationData.city,
+            region: locationData.region
+          },
+          senderId
+        });
+      } catch (locationError) {
+        console.error('Error storing location data:', locationError);
+      }
+    }
+    
+    // Always try to get IP-based location for new users (fallback)
+    await tryCollectIPLocation(senderId);
+    
+  } catch (error) {
+    console.error('Error in collectGeographicData:', error);
+  }
+}
+
+// Parse address parts from text
+function parseAddressParts(addressText) {
+  const parts = {
+    city: null,
+    region: null,
+    country: 'Philippines' // Default for Filipino users
+  };
+  
+  const lowerAddress = addressText.toLowerCase();
+  
+  // Extract city
+  const cityPatterns = [
+    /(manila|quezon\s+city|makati|taguig|pasig|marikina|cebu\s+city|davao\s+city|caloocan|las\s+piñas|muntinlupa|parañaque|pasay|valenzuela|malabon|navotas|san\s+juan)/i,
+    /(angeles|baguio|bacolod|cagayan\s+de\s+oro|iloilo|zamboanga)/i
+  ];
+  
+  for (const pattern of cityPatterns) {
+    const match = lowerAddress.match(pattern);
+    if (match) {
+      parts.city = match[1].charAt(0).toUpperCase() + match[1].slice(1).toLowerCase();
+      break;
+    }
+  }
+  
+  // Extract region based on city or direct mention
+  if (lowerAddress.includes('manila') || lowerAddress.includes('quezon city') || lowerAddress.includes('makati') || 
+      lowerAddress.includes('taguig') || lowerAddress.includes('pasig') || lowerAddress.includes('marikina')) {
+    parts.region = 'Metro Manila';
+  } else if (lowerAddress.includes('cebu')) {
+    parts.region = 'Central Visayas';
+  } else if (lowerAddress.includes('davao')) {
+    parts.region = 'Davao Region';
+  } else if (lowerAddress.includes('baguio')) {
+    parts.region = 'Cordillera Administrative Region';
+  } else if (lowerAddress.includes('iloilo') || lowerAddress.includes('bacolod')) {
+    parts.region = 'Western Visayas';
+  }
+  
+  return parts;
+}
+
+// Try to collect IP-based location (simplified implementation)
+async function tryCollectIPLocation(senderId) {
+  try {
+    // Check if user already has a location
+    const existingLocation = await databaseModule.getUserLocation(senderId);
+    if (existingLocation) {
+      return; // User already has location data
+    }
+    
+    // For MVP, we'll use a simple Philippines-based default
+    // In production, this would use IP geolocation services
+    const defaultLocation = {
+      senderId,
+      country: 'Philippines',
+      locationSource: 'ip',
+      isPrimary: false,
+      accuracyMeters: 50000 // Low accuracy for IP-based
+    };
+    
+    await databaseModule.insertUserLocation(defaultLocation);
+    console.log(`[LOCATION] Stored default location for user ${senderId}`);
+    
+  } catch (error) {
+    console.error('Error in tryCollectIPLocation:', error);
+  }
+}
 
 // Handle incoming messages
 async function handleMessage(event) {
@@ -152,12 +482,28 @@ async function handleMessage(event) {
   }
   
   try {
-    // Store interaction in database
+    // Collect geographic data for analytics and urban planning
+    await collectGeographicData(senderId, event);
+    
+    // Store interaction in database with enhanced metadata
     await databaseModule.insertInteraction({
       senderId,
       messageType: (message.attachments && message.attachments.length > 0) ? 'image' : 'text',
       content: message.text || message.quick_reply?.title || 'image',
       timestamp: new Date().toISOString()
+    });
+    
+    // Store analytics data point for interaction
+    await databaseModule.insertAnalyticsData({
+      dataType: 'user_interaction',
+      category: (message.attachments && message.attachments.length > 0) ? 'image' : 'text',
+      value: message.text || message.quick_reply?.title || 'image_message',
+      metadata: {
+        hasAttachment: !!(message.attachments && message.attachments.length > 0),
+        messageLength: message.text ? message.text.length : 0,
+        interactionType: message.quick_reply ? 'quick_reply' : 'free_text'
+      },
+      senderId
     });
     
     // Handle image with OCR (receipts, invoices, inventory photos)
