@@ -578,44 +578,96 @@ async function parseNumericInput(senderId, lowerText, originalText) {
     if (numericValue > 0) {
       // Get the user's last few interactions to understand context
       try {
-        const recentInteractions = await databaseModule.getUserInteractions(senderId, 5);
+        const recentInteractions = await databaseModule.getUserInteractions(senderId, 10);
         
-        // Look for recent context clues in the last interactions
-        for (const interaction of recentInteractions) {
+        let contextFound = false;
+        let recentItemName = null;
+        let recentItemId = null;
+        let actionType = null;
+        
+        // Analyze recent interactions to determine context and item
+        for (let i = 0; i < recentInteractions.length; i++) {
+          const interaction = recentInteractions[i];
           const content = interaction.content?.toLowerCase();
           
-          // Check for price change context
+          // Look for explicit action context (highest priority)
           if (content?.includes('change price') || content?.includes('bagong price')) {
-            // Find the most recent item ID from ADD_STOCK_, CHANGE_PRICE_, or ITEM_SOLD_ pattern
-            const itemIdMatch = content.match(/(add_stock_|change_price_|item_sold_)(\d+)/);
+            actionType = 'price_change';
+            const itemIdMatch = content.match(/(change_price_)(\d+)/);
             if (itemIdMatch) {
-              const itemId = itemIdMatch[2];
-              return await handleNumericPriceChange(senderId, itemId, numericValue);
+              recentItemId = itemIdMatch[2];
+              contextFound = true;
+              break;
             }
           }
           
-          // Check for add stock context
           else if (content?.includes('adding stock') || content?.includes('quantity na idadagdag')) {
-            const itemIdMatch = content.match(/(add_stock_|change_price_|item_sold_)(\d+)/);
+            actionType = 'add_stock';
+            const itemIdMatch = content.match(/(add_stock_)(\d+)/);
             if (itemIdMatch) {
-              const itemId = itemIdMatch[2];
-              return await handleNumericStockAddition(senderId, itemId, numericValue);
+              recentItemId = itemIdMatch[2];
+              contextFound = true;
+              break;
             }
           }
           
-          // Check for sales context
           else if (content?.includes('record sale') || content?.includes('quantity na nabenta')) {
-            const itemIdMatch = content.match(/(add_stock_|change_price_|item_sold_)(\d+)/);
+            actionType = 'record_sale';
+            const itemIdMatch = content.match(/(item_sold_)(\d+)/);
             if (itemIdMatch) {
-              const itemId = itemIdMatch[2];
-              return await handleNumericSalesRecord(senderId, itemId, numericValue);
+              recentItemId = itemIdMatch[2];
+              contextFound = true;
+              break;
             }
+          }
+          
+          // Look for stock check context (implies user wants to add stock)
+          else if (!contextFound && (content?.includes('stock:') || content?.includes('stock check') || 
+                   content?.includes('tira ng') || content?.includes('check '))) {
+            actionType = 'add_stock_from_check';
+            // Try to extract item name from stock check
+            const stockCheckPatterns = [
+              /stock:\s*([\w\s-]+)/i,
+              /check\s+([\w\s-]+)/i,
+              /tira\s+ng\s+([\w\s-]+)/i,
+              /([\w\s-]+)\s+stock/i
+            ];
+            
+            for (const pattern of stockCheckPatterns) {
+              const itemMatch = content.match(pattern);
+              if (itemMatch) {
+                recentItemName = itemMatch[1].trim();
+                contextFound = true;
+                break;
+              }
+            }
+            
+            if (contextFound) break;
+          }
+        }
+        
+        // Execute based on determined context
+        if (contextFound) {
+          if (actionType === 'price_change' && recentItemId) {
+            return await handleNumericPriceChange(senderId, recentItemId, numericValue);
+          }
+          
+          else if (actionType === 'add_stock' && recentItemId) {
+            return await handleNumericStockAddition(senderId, recentItemId, numericValue);
+          }
+          
+          else if (actionType === 'record_sale' && recentItemId) {
+            return await handleNumericSalesRecord(senderId, recentItemId, numericValue);
+          }
+          
+          else if (actionType === 'add_stock_from_check' && recentItemName) {
+            return await handleNumericStockAdditionByName(senderId, recentItemName, numericValue);
           }
         }
         
         // If no clear context found, provide helpful suggestions
         await messengerModule.sendTextMessage(senderId,
-          `🔢 Nakita ko ang number "${numericValue}" pero hindi ko alam kung para saan ito.\n\nPwede mo gamitin ang:\n• Quick Reply buttons para sa specific actions\n• "Menu" para sa main options\n• O i-describe mo kung ano ang gusto mong gawin`);
+          `🔢 Nakita ko ang number "${numericValue}" pero hindi ko alam kung para saan ito.\n\nPara sa mas specific na action:\n• Use Quick Reply buttons\n• "Menu" para sa main options\n• Stock check → number = add stock\n• Price change → number = new price`);
         
         await sendMainMenu(senderId);
         return true;
@@ -698,6 +750,37 @@ async function handleNumericSalesRecord(senderId, itemId, quantitySold) {
         `❌ May error sa pag-record ng sale. Subukan ulit.`);
     }
     
+    await sendMainMenu(senderId);
+    return true;
+  }
+}
+
+// Handle numeric input for stock addition by item name (from stock check context)
+async function handleNumericStockAdditionByName(senderId, itemName, quantityToAdd) {
+  try {
+    // First, get the item by name to get its ID
+    const item = await databaseModule.getInventoryItem(senderId, itemName);
+    
+    if (!item) {
+      await messengerModule.sendTextMessage(senderId,
+        `❌ Hindi nakita ang "${itemName}" sa inventory mo.\n\nSubukan:\n• I-check ang spelling\n• "List" para tingnan lahat\n• "Add ${itemName} [price] [qty]" kung wala pa`);
+      await sendMainMenu(senderId);
+      return true;
+    }
+    
+    // Use the existing addStockToItem function with the item's ID
+    const updatedItem = await databaseModule.addStockToItem(senderId, item.id, quantityToAdd);
+    
+    await messengerModule.sendTextMessage(senderId,
+      `✅ Stock added successfully!\n\n📦 ${updatedItem.item_name}\n➕ Added: ${quantityToAdd} ${updatedItem.unit}\n📊 New Total Stock: ${updatedItem.quantity} ${updatedItem.unit}\n💰 Price: ₱${updatedItem.price} per ${updatedItem.unit}\n\n🎉 Stock updated from stock check!`);
+    
+    await sendMainMenu(senderId);
+    return true;
+    
+  } catch (error) {
+    console.error('Stock addition by name error:', error);
+    await messengerModule.sendTextMessage(senderId,
+      `❌ May error sa pag-add ng stock para sa "${itemName}". Subukan ulit.`);
     await sendMainMenu(senderId);
     return true;
   }
