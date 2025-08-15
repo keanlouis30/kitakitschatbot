@@ -65,18 +65,141 @@ async function generateAnalytics(filters = {}) {
  */
 async function calculateUserEngagement() {
   try {
-    // This would normally query all interactions
-    // For MVP, we'll return sample metrics
-    const engagement = {
-      dailyActiveUsers: Math.floor(Math.random() * 100) + 50,
-      avgSessionLength: '5.2 minutes',
-      avgInteractionsPerUser: 12.5,
-      retentionRate: '68%',
-      peakUsageHours: ['9:00-10:00', '14:00-15:00', '20:00-21:00'],
-      userGrowthRate: '+15% monthly'
-    };
+    console.log('Calculating user engagement from real database data...');
     
-    return engagement;
+    // Query database for actual engagement metrics
+    const sqlite3 = require('sqlite3').verbose();
+    const path = require('path');
+    const DB_PATH = path.join(__dirname, '..', 'chatbot.db');
+    const db = new sqlite3.Database(DB_PATH);
+    
+    return new Promise((resolve, reject) => {
+      // Get daily active users (users who interacted in the last 24 hours)
+      const dailyActiveQuery = `
+        SELECT COUNT(DISTINCT sender_id) as daily_active_users 
+        FROM interactions 
+        WHERE timestamp >= datetime('now', '-1 day')
+      `;
+      
+      // Get average interactions per user
+      const avgInteractionsQuery = `
+        SELECT AVG(interaction_count) as avg_interactions_per_user
+        FROM (
+          SELECT sender_id, COUNT(*) as interaction_count 
+          FROM interactions 
+          GROUP BY sender_id
+        )
+      `;
+      
+      // Query execution
+      db.get(dailyActiveQuery, [], (err, dailyActiveResult) => {
+        if (err) {
+          console.error('Error getting daily active users:', err);
+          dailyActiveResult = { daily_active_users: 0 };
+        }
+        
+        db.get(avgInteractionsQuery, [], (err, avgInteractionsResult) => {
+          if (err) {
+            console.error('Error getting average interactions per user:', err);
+            avgInteractionsResult = { avg_interactions_per_user: 0 };
+          }
+          
+          // Get retention rate (users who returned within a week)
+          const retentionQuery = `
+            WITH 
+              total_users AS (
+                SELECT COUNT(DISTINCT sender_id) as count 
+                FROM interactions
+              ),
+              returning_users AS (
+                SELECT sender_id, COUNT(DISTINCT date(timestamp)) as days
+                FROM interactions
+                GROUP BY sender_id
+                HAVING days > 1
+              )
+            SELECT 
+              (SELECT COUNT(*) FROM returning_users) * 100.0 / 
+              (SELECT count FROM total_users) as retention_rate
+          `;
+          
+          db.get(retentionQuery, [], (err, retentionResult) => {
+            if (err) {
+              console.error('Error calculating retention rate:', err);
+              retentionResult = { retention_rate: 0 };
+            }
+            
+            // Calculate peak usage hours
+            const peakHoursQuery = `
+              SELECT 
+                strftime('%H:00', timestamp) as hour,
+                COUNT(*) as count
+              FROM interactions
+              GROUP BY hour
+              ORDER BY count DESC
+              LIMIT 3
+            `;
+            
+            db.all(peakHoursQuery, [], (err, peakHoursResult) => {
+              if (err) {
+                console.error('Error getting peak hours:', err);
+                peakHoursResult = [];
+              }
+              
+              // Calculate user growth rate (comparing this month to previous month)
+              const growthRateQuery = `
+                WITH 
+                  current_month AS (
+                    SELECT COUNT(DISTINCT sender_id) as users
+                    FROM interactions
+                    WHERE timestamp >= datetime('now', 'start of month')
+                  ),
+                  previous_month AS (
+                    SELECT COUNT(DISTINCT sender_id) as users
+                    FROM interactions
+                    WHERE timestamp >= datetime('now', 'start of month', '-1 month')
+                    AND timestamp < datetime('now', 'start of month')
+                  )
+                SELECT 
+                  CASE 
+                    WHEN (SELECT users FROM previous_month) = 0 THEN '0%'
+                    ELSE ((SELECT users FROM current_month) - (SELECT users FROM previous_month)) * 100.0 / 
+                         (SELECT users FROM previous_month) || '%'
+                  END as growth_rate
+              `;
+              
+              db.get(growthRateQuery, [], (err, growthResult) => {
+                if (err) {
+                  console.error('Error calculating growth rate:', err);
+                  growthResult = { growth_rate: '0%' };
+                }
+                
+                // Close the database connection
+                db.close();
+                
+                // Format the peak hours results
+                const peakHours = peakHoursResult.map(row => row.hour).map(hour => {
+                  const h = parseInt(hour);
+                  return `${h}:00-${h+1}:00`;
+                });
+                
+                // Create the final engagement object with real data
+                const engagement = {
+                  dailyActiveUsers: dailyActiveResult.daily_active_users || 0,
+                  avgSessionLength: '5.2 minutes', // This would need session tracking to calculate accurately
+                  avgInteractionsPerUser: avgInteractionsResult.avg_interactions_per_user || 0,
+                  retentionRate: `${Math.round(retentionResult.retention_rate || 0)}%`,
+                  peakUsageHours: peakHours.length > 0 ? peakHours : ['No data available'],
+                  userGrowthRate: growthResult.growth_rate || '0%'
+                };
+                
+                resolve(engagement);
+              });
+            });
+          });
+        });
+      });
+    });
+    
   } catch (error) {
     console.error('Error calculating engagement:', error);
     return {};
