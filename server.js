@@ -198,6 +198,46 @@ app.get('/analytics', async (req, res) => {
   }
 });
 
+// Demo data injection endpoint (for demo purposes only)
+app.post('/admin/inject-demo-data', async (req, res) => {
+  try {
+    console.log('[ADMIN] Demo data injection requested');
+    
+    // Security check - only allow in development or with specific token
+    const authToken = req.headers['x-demo-token'] || req.query.token;
+    if (authToken !== 'demo-kitakits-2024') {
+      return res.status(403).json({
+        success: false,
+        error: 'Unauthorized - Demo token required'
+      });
+    }
+    
+    // Import the injection script
+    const { injectDemoData } = require('./inject-demo-data');
+    
+    // Run the injection
+    await injectDemoData();
+    
+    // Get updated stats
+    const stats = await databaseModule.getDatabaseStats();
+    
+    res.json({
+      success: true,
+      message: 'Demo data injected successfully',
+      stats,
+      timestamp: new Date().toISOString()
+    });
+    
+  } catch (error) {
+    console.error('[ADMIN] Demo data injection error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to inject demo data',
+      details: error.message
+    });
+  }
+});
+
 // Urban planning focused analytics endpoint
 app.get('/analytics/urban-planning/full', async (req, res) => {
   try {
