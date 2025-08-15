@@ -372,22 +372,30 @@ function addInventoryItem(data) {
 }
 
 /**
- * Get inventory item by name
+ * Get inventory item by name or ID
  */
-function getInventoryItem(senderId, itemName) {
+function getInventoryItem(senderId, itemName, itemId) {
   return new Promise((resolve, reject) => {
-    db.get(
-      `SELECT * FROM inventory_items 
-       WHERE sender_id = ? AND LOWER(item_name) = LOWER(?)`,
-      [senderId, itemName],
-      (err, row) => {
-        if (err) {
-          reject(err);
-        } else {
-          resolve(row);
-        }
+    let query;
+    let params;
+    
+    if (itemId) {
+      // Get by ID
+      query = `SELECT * FROM inventory_items WHERE sender_id = ? AND id = ?`;
+      params = [senderId, itemId];
+    } else {
+      // Get by name
+      query = `SELECT * FROM inventory_items WHERE sender_id = ? AND LOWER(item_name) = LOWER(?)`;
+      params = [senderId, itemName];
+    }
+    
+    db.get(query, params, (err, row) => {
+      if (err) {
+        reject(err);
+      } else {
+        resolve(row);
       }
-    );
+    });
   });
 }
 
@@ -542,6 +550,144 @@ function getExpiringItems(senderId, days = 7) {
   });
 }
 
+/**
+ * Update item price by ID
+ */
+function updateItemPrice(senderId, itemId, newPrice) {
+  return new Promise((resolve, reject) => {
+    db.run(
+      `UPDATE inventory_items 
+       SET price = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE sender_id = ? AND id = ?`,
+      [newPrice, senderId, itemId],
+      function(err) {
+        if (err) {
+          reject(err);
+        } else if (this.changes === 0) {
+          reject(new Error('Item not found or no changes made'));
+        } else {
+          // Get the updated item details
+          db.get(
+            `SELECT * FROM inventory_items WHERE sender_id = ? AND id = ?`,
+            [senderId, itemId],
+            (err, row) => {
+              if (err) {
+                reject(err);
+              } else {
+                resolve(row);
+              }
+            }
+          );
+        }
+      }
+    );
+  });
+}
+
+/**
+ * Add stock to existing item by ID
+ */
+function addStockToItem(senderId, itemId, quantityToAdd) {
+  return new Promise((resolve, reject) => {
+    db.run(
+      `UPDATE inventory_items 
+       SET quantity = quantity + ?, updated_at = CURRENT_TIMESTAMP
+       WHERE sender_id = ? AND id = ?`,
+      [quantityToAdd, senderId, itemId],
+      function(err) {
+        if (err) {
+          reject(err);
+        } else if (this.changes === 0) {
+          reject(new Error('Item not found or no changes made'));
+        } else {
+          // Get the updated item details
+          db.get(
+            `SELECT * FROM inventory_items WHERE sender_id = ? AND id = ?`,
+            [senderId, itemId],
+            (err, row) => {
+              if (err) {
+                reject(err);
+              } else {
+                resolve(row);
+              }
+            }
+          );
+        }
+      }
+    );
+  });
+}
+
+/**
+ * Record sale by item ID
+ */
+function recordSaleById(senderId, itemId, quantitySold) {
+  return new Promise((resolve, reject) => {
+    // First get the item details
+    db.get(
+      `SELECT * FROM inventory_items WHERE sender_id = ? AND id = ?`,
+      [senderId, itemId],
+      (err, item) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+        
+        if (!item) {
+          reject(new Error('Item not found'));
+          return;
+        }
+        
+        if (item.quantity < quantitySold) {
+          reject(new Error('Insufficient stock'));
+          return;
+        }
+        
+        const totalAmount = item.price * quantitySold;
+        
+        db.serialize(() => {
+          // Record the sale
+          db.run(
+            `INSERT INTO sales_transactions (sender_id, item_name, quantity_sold, unit_price, total_amount) 
+             VALUES (?, ?, ?, ?, ?)`,
+            [senderId, item.item_name, quantitySold, item.price, totalAmount],
+            function(err) {
+              if (err) {
+                reject(err);
+                return;
+              }
+              
+              const saleId = this.lastID;
+              
+              // Update inventory quantity
+              db.run(
+                `UPDATE inventory_items 
+                 SET quantity = quantity - ?, updated_at = CURRENT_TIMESTAMP
+                 WHERE id = ?`,
+                [quantitySold, itemId],
+                (err) => {
+                  if (err) {
+                    reject(err);
+                  } else {
+                    resolve({ 
+                      saleId, 
+                      itemName: item.item_name, 
+                      quantitySold, 
+                      unitPrice: item.price,
+                      totalAmount,
+                      remainingStock: item.quantity - quantitySold
+                    });
+                  }
+                }
+              );
+            }
+          );
+        });
+      }
+    );
+  });
+}
+
 module.exports = {
   initializeDB,
   insertInteraction,
@@ -558,7 +704,10 @@ module.exports = {
   searchInventoryItems,
   getAllInventoryItems,
   recordSale,
+  recordSaleById,
   getLowStockItems,
   getSalesSummary,
-  getExpiringItems
+  getExpiringItems,
+  updateItemPrice,
+  addStockToItem
 };

@@ -322,6 +322,11 @@ async function handleTextCommands(senderId, lowerText, originalText) {
     // Command was processed by parseStockCheckCommand
     return;
   }
+  // Handle numeric inputs (price changes, stock additions, sales quantities)
+  else if (await parseNumericInput(senderId, lowerText, originalText)) {
+    // Command was processed by parseNumericInput
+    return;
+  }
   // Add new item commands (fallback)
   else if (lowerText.includes('add') || lowerText.includes('dagdag') ||
            lowerText.includes('bago') || lowerText.includes('new')) {
@@ -559,6 +564,143 @@ async function parseSoldItemCommand(senderId, lowerText, originalText) {
     }
   }
   return false;
+}
+
+// Parse numeric inputs for price changes, stock additions, and sales quantities
+async function parseNumericInput(senderId, lowerText, originalText) {
+  // Check if input is purely numeric (with optional decimal point)
+  const numericPattern = /^(\d+(?:\.\d+)?)$/;
+  const match = originalText.trim().match(numericPattern);
+  
+  if (match) {
+    const numericValue = parseFloat(match[1]);
+    
+    if (numericValue > 0) {
+      // Get the user's last few interactions to understand context
+      try {
+        const recentInteractions = await databaseModule.getUserInteractions(senderId, 5);
+        
+        // Look for recent context clues in the last interactions
+        for (const interaction of recentInteractions) {
+          const content = interaction.content?.toLowerCase();
+          
+          // Check for price change context
+          if (content?.includes('change price') || content?.includes('bagong price')) {
+            // Find the most recent item ID from ADD_STOCK_, CHANGE_PRICE_, or ITEM_SOLD_ pattern
+            const itemIdMatch = content.match(/(add_stock_|change_price_|item_sold_)(\d+)/);
+            if (itemIdMatch) {
+              const itemId = itemIdMatch[2];
+              return await handleNumericPriceChange(senderId, itemId, numericValue);
+            }
+          }
+          
+          // Check for add stock context
+          else if (content?.includes('adding stock') || content?.includes('quantity na idadagdag')) {
+            const itemIdMatch = content.match(/(add_stock_|change_price_|item_sold_)(\d+)/);
+            if (itemIdMatch) {
+              const itemId = itemIdMatch[2];
+              return await handleNumericStockAddition(senderId, itemId, numericValue);
+            }
+          }
+          
+          // Check for sales context
+          else if (content?.includes('record sale') || content?.includes('quantity na nabenta')) {
+            const itemIdMatch = content.match(/(add_stock_|change_price_|item_sold_)(\d+)/);
+            if (itemIdMatch) {
+              const itemId = itemIdMatch[2];
+              return await handleNumericSalesRecord(senderId, itemId, numericValue);
+            }
+          }
+        }
+        
+        // If no clear context found, provide helpful suggestions
+        await messengerModule.sendTextMessage(senderId,
+          `🔢 Nakita ko ang number "${numericValue}" pero hindi ko alam kung para saan ito.\n\nPwede mo gamitin ang:\n• Quick Reply buttons para sa specific actions\n• "Menu" para sa main options\n• O i-describe mo kung ano ang gusto mong gawin`);
+        
+        await sendMainMenu(senderId);
+        return true;
+        
+      } catch (error) {
+        console.error('Numeric input parsing error:', error);
+        return false;
+      }
+    }
+  }
+  
+  return false;
+}
+
+// Handle numeric input for price changes
+async function handleNumericPriceChange(senderId, itemId, newPrice) {
+  try {
+    const updatedItem = await databaseModule.updateItemPrice(senderId, itemId, newPrice);
+    
+    await messengerModule.sendTextMessage(senderId,
+      `✅ Price updated successfully!\n\n📦 ${updatedItem.item_name}\n💰 New Price: ₱${newPrice}\n📊 Current Stock: ${updatedItem.quantity} ${updatedItem.unit}\n\n✨ Updated na ang price!`);
+    
+    await sendMainMenu(senderId);
+    return true;
+    
+  } catch (error) {
+    console.error('Price update error:', error);
+    await messengerModule.sendTextMessage(senderId,
+      `❌ May error sa pag-update ng price. Siguro hindi mo item o may problema sa database.`);
+    await sendMainMenu(senderId);
+    return true;
+  }
+}
+
+// Handle numeric input for stock additions
+async function handleNumericStockAddition(senderId, itemId, quantityToAdd) {
+  try {
+    const updatedItem = await databaseModule.addStockToItem(senderId, itemId, quantityToAdd);
+    
+    await messengerModule.sendTextMessage(senderId,
+      `✅ Stock added successfully!\n\n📦 ${updatedItem.item_name}\n➕ Added: ${quantityToAdd} ${updatedItem.unit}\n📊 New Total Stock: ${updatedItem.quantity} ${updatedItem.unit}\n💰 Price: ₱${updatedItem.price} per ${updatedItem.unit}\n\n🎉 Stock updated!`);
+    
+    await sendMainMenu(senderId);
+    return true;
+    
+  } catch (error) {
+    console.error('Stock addition error:', error);
+    await messengerModule.sendTextMessage(senderId,
+      `❌ May error sa pag-add ng stock. Siguro hindi mo item o may problema sa database.`);
+    await sendMainMenu(senderId);
+    return true;
+  }
+}
+
+// Handle numeric input for sales recording
+async function handleNumericSalesRecord(senderId, itemId, quantitySold) {
+  try {
+    const saleResult = await databaseModule.recordSaleById(senderId, itemId, quantitySold);
+    
+    await messengerModule.sendTextMessage(senderId,
+      `💰 Sale recorded successfully!\n\n📦 ${saleResult.itemName}\n🛒 Sold: ${quantitySold} units\n💵 Unit Price: ₱${saleResult.unitPrice}\n💸 Total Amount: ₱${saleResult.totalAmount.toFixed(2)}\n\n📊 Remaining Stock: ${saleResult.remainingStock} units`);
+    
+    // Low stock warning
+    if (saleResult.remainingStock <= 5) {
+      await messengerModule.sendTextMessage(senderId,
+        `⚠️ LOW STOCK ALERT!\n\n📦 ${saleResult.itemName} = ${saleResult.remainingStock} units na lang\n\nTime to restock!`);
+    }
+    
+    await sendMainMenu(senderId);
+    return true;
+    
+  } catch (error) {
+    console.error('Sales recording error:', error);
+    
+    if (error.message === 'Insufficient stock') {
+      await messengerModule.sendTextMessage(senderId,
+        `❌ Kulang ang stock! Hindi pwedeng mag-oversell.\n\nI-check muna ang available stock gamit ang "List" command.`);
+    } else {
+      await messengerModule.sendTextMessage(senderId,
+        `❌ May error sa pag-record ng sale. Subukan ulit.`);
+    }
+    
+    await sendMainMenu(senderId);
+    return true;
+  }
 }
 
 // Parse Stock Check Commands (e.g., "Stock Coca-Cola", "Check Rice", "Tira ng Bread")
