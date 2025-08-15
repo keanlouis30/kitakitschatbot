@@ -326,9 +326,13 @@ async function handleTextCommands(senderId, lowerText, originalText) {
   }
   // Default response for unrecognized text
   else {
-    await messengerModule.sendTextMessage(senderId, 
-      `📝 Natanggap: "${originalText}"\n\nHindi ko naintindihan. Subukan ang mga ito:\n• "Add [item] [price] [qty]"\n• "Stock [item]"\n• "Sold [item] [qty]"\n• "Help" para sa commands`);
-    await sendMainMenu(senderId);
+    await messengerModule.sendQuickReplies(senderId, 
+      `📝 Hindi ko naintindihan ang "${originalText}"\n\nSubukan ang mga ito:`, [
+      { title: '📦 Add Item', payload: 'NEW_ITEM' },
+      { title: '📋 Check Stock', payload: 'CHECK_STOCK' },
+      { title: '💰 Record Sale', payload: 'SOLD_ITEM' },
+      { title: '❓ Help', payload: 'HELP' }
+    ]);
   }
 }
 
@@ -362,25 +366,45 @@ async function sendHelpMessage(senderId) {
   await sendMainMenu(senderId);
 }
 
-// Check for low stock items (placeholder)
-async function checkLowStockItems(senderId) {
-  await messengerModule.sendTextMessage(senderId, 
-    '⚠️ Low Stock Alert\n\nWalang nakitang low stock items sa ngayon.\n\nTip: Mag-add ng items with quantity para ma-track ang stock levels.');
-  await sendMainMenu(senderId);
-}
-
-// Check for expiring items (placeholder)
+// Check for expiring items (enhanced with real data)
 async function checkExpiringItems(senderId) {
-  await messengerModule.sendTextMessage(senderId, 
-    '📅 Expiry Check\n\nWalang expiring items ngayon.\n\nTip: I-include ang expiry date kapag nag-add ng perishable items.');
-  await sendMainMenu(senderId);
-}
-
-// Show daily sales (placeholder)
-async function showDailySales(senderId) {
-  await messengerModule.sendTextMessage(senderId, 
-    '💵 Daily Sales Report\n\nToday\'s Sales: ₱0.00\nTransactions: 0\n\nMag-record ng sales para makita ang report!');
-  await sendMainMenu(senderId);
+  try {
+    const expiringItems = await databaseModule.getExpiringItems(senderId, 7);
+    
+    if (expiringItems.length === 0) {
+      await messengerModule.sendTextMessage(senderId,
+        '📅 Expiry Check\n\n✅ Walang expiring items ngayon!\n\nLahat ng items mo ay hindi pa malapit mag-expire sa loob ng 7 days.\n\n💡 Tip: I-include ang expiry date kapag nag-add ng perishable items para sa mas accurate tracking.');
+    } else {
+      let expiryMessage = `📅 EXPIRY ALERT! (${expiringItems.length} items)\n\n`;
+      
+      expiringItems.forEach((item, index) => {
+        const expiryDate = new Date(item.expiry_date);
+        const daysUntilExpiry = Math.ceil((expiryDate - new Date()) / (1000 * 60 * 60 * 24));
+        const urgencyIcon = daysUntilExpiry <= 1 ? '🚨' : daysUntilExpiry <= 3 ? '⚠️' : '📅';
+        
+        expiryMessage += `${index + 1}. ${urgencyIcon} ${item.item_name}\n`;
+        expiryMessage += `   📊 Stock: ${item.quantity} ${item.unit}\n`;
+        expiryMessage += `   📅 Expires: ${expiryDate.toLocaleDateString()}`;
+        
+        if (daysUntilExpiry <= 1) {
+          expiryMessage += ' (TODAY/TOMORROW!)';
+        } else {
+          expiryMessage += ` (${daysUntilExpiry} days)`;
+        }
+        
+        expiryMessage += `\n   💰 Value: ₱${(item.price * item.quantity).toFixed(2)}\n\n`;
+      });
+      
+      expiryMessage += '🛒 Consider selling these items soon or offering discounts!';
+      await messengerModule.sendTextMessage(senderId, expiryMessage);
+    }
+    
+    await sendMainMenu(senderId);
+  } catch (error) {
+    console.error('Expiry check error:', error);
+    await messengerModule.sendTextMessage(senderId,
+      '❌ May error sa pag-check ng expiring items. Subukan ulit.');
+  }
 }
 
 // Smart text parsing functions

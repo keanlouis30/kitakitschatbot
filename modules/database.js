@@ -519,6 +519,29 @@ function getSalesSummary(senderId, days = 1) {
   });
 }
 
+/**
+ * Get items expiring within specified days
+ */
+function getExpiringItems(senderId, days = 7) {
+  return new Promise((resolve, reject) => {
+    db.all(
+      `SELECT * FROM inventory_items 
+       WHERE sender_id = ? AND expiry_date IS NOT NULL 
+       AND date(expiry_date) <= date('now', '+${days} days')
+       AND date(expiry_date) >= date('now')
+       ORDER BY expiry_date ASC`,
+      [senderId],
+      (err, rows) => {
+        if (err) {
+          reject(err);
+        } else {
+          resolve(rows);
+        }
+      }
+    );
+  });
+}
+
 module.exports = {
   initializeDB,
   insertInteraction,
@@ -536,5 +559,6 @@ module.exports = {
   getAllInventoryItems,
   recordSale,
   getLowStockItems,
-  getSalesSummary
+  getSalesSummary,
+  getExpiringItems
 };
