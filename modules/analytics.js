@@ -122,52 +122,28 @@ async function analyzeOCRData() {
 }
 
 /**
- * Calculate trends over time
+ * Calculate trends over time from real database data
  */
 async function calculateTrends() {
   try {
-    // Generate sample trend data for MVP
-    const last7Days = [];
-    const today = new Date();
+    console.log('Calculating trends from real database data...');
     
-    for (let i = 6; i >= 0; i--) {
-      const date = new Date(today);
-      date.setDate(date.getDate() - i);
-      
-      last7Days.push({
-        date: date.toISOString().split('T')[0],
-        interactions: Math.floor(Math.random() * 200) + 100,
-        newUsers: Math.floor(Math.random() * 30) + 10,
-        ocrProcessed: Math.floor(Math.random() * 150) + 50
-      });
-    }
+    // Get daily data for the last 7 days from real database
+    const last7Days = await getDailyTrendsFromDB();
+    
+    // Get weekly aggregated data
+    const weeklyData = await getWeeklyTrendsFromDB();
     
     const trends = {
       daily: last7Days,
-      weekly: {
-        currentWeek: {
-          interactions: 1850,
-          newUsers: 145,
-          ocrProcessed: 680
-        },
-        previousWeek: {
-          interactions: 1620,
-          newUsers: 132,
-          ocrProcessed: 590
-        },
-        percentageChange: {
-          interactions: '+14.2%',
-          newUsers: '+9.8%',
-          ocrProcessed: '+15.3%'
-        }
-      },
+      weekly: weeklyData,
       monthly: {
-        trend: 'increasing',
-        growthRate: '+22%',
+        trend: weeklyData.percentageChange.interactions.includes('+') ? 'increasing' : 'decreasing',
+        growthRate: weeklyData.percentageChange.interactions,
         projectedNextMonth: {
-          interactions: 8500,
-          newUsers: 650,
-          ocrProcessed: 3200
+          interactions: Math.round(weeklyData.currentWeek.interactions * 4.3 * 1.1), // Rough monthly projection
+          newUsers: Math.round(weeklyData.currentWeek.newUsers * 4.3 * 1.1),
+          ocrProcessed: Math.round(weeklyData.currentWeek.ocrProcessed * 4.3 * 1.1)
         }
       }
     };
@@ -175,8 +151,195 @@ async function calculateTrends() {
     return trends;
   } catch (error) {
     console.error('Error calculating trends:', error);
-    return {};
+    return {
+      daily: [],
+      weekly: {
+        currentWeek: { interactions: 0, newUsers: 0, ocrProcessed: 0 },
+        previousWeek: { interactions: 0, newUsers: 0, ocrProcessed: 0 },
+        percentageChange: { interactions: '0%', newUsers: '0%', ocrProcessed: '0%' }
+      },
+      monthly: {
+        trend: 'stable',
+        growthRate: '0%',
+        projectedNextMonth: { interactions: 0, newUsers: 0, ocrProcessed: 0 }
+      }
+    };
   }
+}
+
+/**
+ * Get daily trends from database for the last 7 days
+ */
+async function getDailyTrendsFromDB() {
+  return new Promise((resolve, reject) => {
+    const last7Days = [];
+    const today = new Date();
+    
+    // Generate date range for last 7 days
+    for (let i = 6; i >= 0; i--) {
+      const date = new Date(today);
+      date.setDate(date.getDate() - i);
+      const dateStr = date.toISOString().split('T')[0];
+      
+      last7Days.push({
+        date: dateStr,
+        interactions: 0,
+        newUsers: 0,
+        ocrProcessed: 0
+      });
+    }
+    
+    // Query database for actual daily data
+    const sqlite3 = require('sqlite3').verbose();
+    const path = require('path');
+    const DB_PATH = path.join(__dirname, '..', 'chatbot.db');
+    const db = new sqlite3.Database(DB_PATH);
+    
+    // Get interactions by day
+    const query = `
+      SELECT 
+        DATE(timestamp) as date,
+        COUNT(*) as interactions,
+        COUNT(DISTINCT sender_id) as newUsers
+      FROM interactions 
+      WHERE DATE(timestamp) >= DATE('now', '-6 days')
+      GROUP BY DATE(timestamp)
+      ORDER BY date
+    `;
+    
+    db.all(query, [], (err, interactionRows) => {
+      if (err) {
+        console.error('Error getting daily interaction trends:', err);
+        resolve(last7Days); // Return empty data on error
+        return;
+      }
+      
+      // Get OCR data by day
+      const ocrQuery = `
+        SELECT 
+          DATE(timestamp) as date,
+          COUNT(*) as ocrProcessed
+        FROM ocr_results 
+        WHERE DATE(timestamp) >= DATE('now', '-6 days')
+        GROUP BY DATE(timestamp)
+        ORDER BY date
+      `;
+      
+      db.all(ocrQuery, [], (err, ocrRows) => {
+        if (err) {
+          console.error('Error getting daily OCR trends:', err);
+        }
+        
+        // Merge real data into the date array
+        last7Days.forEach(day => {
+          const interactionData = interactionRows.find(row => row.date === day.date);
+          const ocrData = ocrRows ? ocrRows.find(row => row.date === day.date) : null;
+          
+          if (interactionData) {
+            day.interactions = interactionData.interactions;
+            day.newUsers = interactionData.newUsers;
+          }
+          
+          if (ocrData) {
+            day.ocrProcessed = ocrData.ocrProcessed;
+          }
+        });
+        
+        db.close();
+        resolve(last7Days);
+      });
+    });
+  });
+}
+
+/**
+ * Get weekly trends from database
+ */
+async function getWeeklyTrendsFromDB() {
+  return new Promise((resolve, reject) => {
+    const sqlite3 = require('sqlite3').verbose();
+    const path = require('path');
+    const DB_PATH = path.join(__dirname, '..', 'chatbot.db');
+    const db = new sqlite3.Database(DB_PATH);
+    
+    // Current week (last 7 days)
+    const currentWeekQuery = `
+      SELECT 
+        COUNT(*) as interactions,
+        COUNT(DISTINCT sender_id) as newUsers
+      FROM interactions 
+      WHERE DATE(timestamp) >= DATE('now', '-6 days')
+    `;
+    
+    // Previous week (7-13 days ago)
+    const previousWeekQuery = `
+      SELECT 
+        COUNT(*) as interactions,
+        COUNT(DISTINCT sender_id) as newUsers
+      FROM interactions 
+      WHERE DATE(timestamp) >= DATE('now', '-13 days') 
+        AND DATE(timestamp) < DATE('now', '-6 days')
+    `;
+    
+    let currentWeek = { interactions: 0, newUsers: 0, ocrProcessed: 0 };
+    let previousWeek = { interactions: 0, newUsers: 0, ocrProcessed: 0 };
+    
+    db.get(currentWeekQuery, [], (err, currentRow) => {
+      if (!err && currentRow) {
+        currentWeek.interactions = currentRow.interactions;
+        currentWeek.newUsers = currentRow.newUsers;
+      }
+      
+      db.get(previousWeekQuery, [], (err, previousRow) => {
+        if (!err && previousRow) {
+          previousWeek.interactions = previousRow.interactions;
+          previousWeek.newUsers = previousRow.newUsers;
+        }
+        
+        // Get OCR data for current week
+        db.get(
+          `SELECT COUNT(*) as ocrProcessed FROM ocr_results WHERE DATE(timestamp) >= DATE('now', '-6 days')`,
+          [],
+          (err, currentOcrRow) => {
+            if (!err && currentOcrRow) {
+              currentWeek.ocrProcessed = currentOcrRow.ocrProcessed;
+            }
+            
+            // Get OCR data for previous week
+            db.get(
+              `SELECT COUNT(*) as ocrProcessed FROM ocr_results WHERE DATE(timestamp) >= DATE('now', '-13 days') AND DATE(timestamp) < DATE('now', '-6 days')`,
+              [],
+              (err, previousOcrRow) => {
+                if (!err && previousOcrRow) {
+                  previousWeek.ocrProcessed = previousOcrRow.ocrProcessed;
+                }
+                
+                // Calculate percentage changes
+                const calculateChange = (current, previous) => {
+                  if (previous === 0) return current > 0 ? '+100%' : '0%';
+                  const change = ((current - previous) / previous) * 100;
+                  return (change >= 0 ? '+' : '') + change.toFixed(1) + '%';
+                };
+                
+                const percentageChange = {
+                  interactions: calculateChange(currentWeek.interactions, previousWeek.interactions),
+                  newUsers: calculateChange(currentWeek.newUsers, previousWeek.newUsers),
+                  ocrProcessed: calculateChange(currentWeek.ocrProcessed, previousWeek.ocrProcessed)
+                };
+                
+                db.close();
+                resolve({
+                  currentWeek,
+                  previousWeek,
+                  percentageChange
+                });
+              }
+            );
+          }
+        );
+      });
+    });
+  });
 }
 
 /**
