@@ -282,33 +282,12 @@ async function processInventoryData(senderId, ocrResult) {
       return;
     }
     
-    // Store extracted items temporarily for confirmation
+    // Store extracted items temporarily for confirmation (store ALL items, not just 10)
     await storeTemporaryData(senderId, 'inventory', extractedItems);
     await storeOnboardingState(senderId, ONBOARDING_STATES.CONFIRM_EXTRACTED_DATA);
     
-    let confirmMessage = `📦 **Found ${extractedItems.length} inventory items:**\n\n`;
-    
-    extractedItems.slice(0, 10).forEach((item, index) => {
-      confirmMessage += `${index + 1}. ${item.name} - ${item.quantity} ${item.unit} @ ₱${item.price}\n`;
-    });
-    
-    if (extractedItems.length > 10) {
-      confirmMessage += `\n... and ${extractedItems.length - 10} more items\n`;
-    }
-    
-    confirmMessage += `\n**Confidence:** ${Math.round(ocrResult.confidence)}%\n\n`;
-    confirmMessage += `Is this data correct?`;
-    
-    await messengerModule.sendTextMessage(senderId, confirmMessage);
-    
-    await messengerModule.sendQuickReplies(senderId, 
-      'Confirm the extracted inventory data:', [
-        { title: '✅ Yes, Add All Items', payload: 'ONBOARD_CONFIRM_INVENTORY' },
-        { title: '📝 Let Me Review/Edit', payload: 'ONBOARD_REVIEW_INVENTORY' },
-        { title: '📸 Try Another Photo', payload: 'ONBOARD_RETRY_PHOTO' },
-        { title: '❌ Skip This Step', payload: 'ONBOARD_SKIP' }
-      ]
-    );
+    // Show first page of items with pagination if needed
+    await showInventoryItemsPage(senderId, extractedItems, 0, ocrResult.confidence);
     
   } catch (error) {
     console.error('Error processing inventory data:', error);
@@ -603,6 +582,10 @@ async function handleDataConfirmation(senderId, payload) {
         await completeOnboarding(senderId);
         break;
         
+      case 'ONBOARD_COMPLETE':
+        await completeOnboarding(senderId);
+        break;
+        
       default:
         break;
     }
@@ -759,8 +742,15 @@ async function completeOnboarding(senderId) {
     
     await messengerModule.sendTextMessage(senderId, completionMessage);
     
-    // The main menu will be called by server.js after consent completion
-    // This completes the onboarding process
+    // Show main menu
+    await messengerModule.sendQuickReplies(senderId, '🏪 Pumili ng aksyon:', [
+      { title: '📦 Add Item to Inventory', payload: 'ADD_ITEM_TO_INVENTORY' },
+      { title: '➕ Add Stock to Item', payload: 'ADD_STOCK_TO_ITEM' },
+      { title: '💰 Change Item Price', payload: 'CHANGE_ITEM_PRICE' },
+      { title: '📤 Item Sold', payload: 'ITEM_SOLD' },
+      { title: '📊 Summary', payload: 'SUMMARY' },
+      { title: '📄 Scan Document', payload: 'SCAN_DOCUMENT' }
+    ]);
     
   } catch (error) {
     console.error('Error completing onboarding:', error);
@@ -835,12 +825,132 @@ async function clearTemporaryData(senderId) {
   delete global.tempOnboardingData[senderId];
 }
 
+/**
+ * Show inventory items page with pagination support
+ */
+async function showInventoryItemsPage(senderId, items, pageIndex, confidence) {
+  const itemsPerPage = 10;
+  const totalPages = Math.ceil(items.length / itemsPerPage);
+  const startIndex = pageIndex * itemsPerPage;
+  const endIndex = startIndex + itemsPerPage;
+  const currentPageItems = items.slice(startIndex, endIndex);
+  
+  let confirmMessage = `📦 **Found ${items.length} inventory items (Page ${pageIndex + 1}/${totalPages}):**\n\n`;
+  
+  currentPageItems.forEach((item, index) => {
+    const globalIndex = startIndex + index + 1;
+    confirmMessage += `${globalIndex}. ${item.name} - ${item.quantity} ${item.unit} @ ₱${item.price}\n`;
+  });
+  
+  confirmMessage += `\n**Confidence:** ${Math.round(confidence)}%\n\n`;
+  confirmMessage += `Is this data correct?`;
+  
+  await messengerModule.sendTextMessage(senderId, confirmMessage);
+  
+  // Build quick replies with pagination controls
+  const quickReplies = [
+    { title: '✅ Yes, Add All Items', payload: 'ONBOARD_CONFIRM_INVENTORY' },
+    { title: '📝 Let Me Review/Edit', payload: 'ONBOARD_REVIEW_INVENTORY' }
+  ];
+  
+  // Add pagination controls if needed
+  if (totalPages > 1) {
+    if (pageIndex > 0) {
+      quickReplies.push({ title: '⬅️ Previous Page', payload: `ONBOARD_INVENTORY_PAGE_${pageIndex - 1}` });
+    }
+    if (pageIndex < totalPages - 1) {
+      quickReplies.push({ title: '➡️ Next Page', payload: `ONBOARD_INVENTORY_PAGE_${pageIndex + 1}` });
+    }
+  }
+  
+  // Add remaining options
+  quickReplies.push(
+    { title: '📸 Try Another Photo', payload: 'ONBOARD_RETRY_PHOTO' },
+    { title: '❌ Skip This Step', payload: 'ONBOARD_SKIP' }
+  );
+  
+  // Limit to Messenger's 13 quick reply limit
+  const limitedQuickReplies = quickReplies.slice(0, 13);
+  
+  await messengerModule.sendQuickReplies(senderId, 
+    'Confirm the extracted inventory data:', 
+    limitedQuickReplies
+  );
+  
+  // Store current page index for pagination
+  await storePaginationState(senderId, 'inventory', pageIndex, confidence);
+}
+
+/**
+ * Handle pagination for inventory items
+ */
+async function handleInventoryPagination(senderId, pageIndex) {
+  try {
+    const tempData = await getTemporaryData(senderId);
+    const paginationState = await getPaginationState(senderId, 'inventory');
+    
+    if (!tempData || tempData.type !== 'inventory' || !paginationState) {
+      await messengerModule.sendTextMessage(senderId, 
+        'Session expired. Please upload your photo again.');
+      await setupInventoryUpload(senderId);
+      return;
+    }
+    
+    await showInventoryItemsPage(senderId, tempData.data, pageIndex, paginationState.confidence);
+    
+  } catch (error) {
+    console.error('Error handling inventory pagination:', error);
+    await messengerModule.sendTextMessage(senderId, 
+      'Error displaying items. Please try again.');
+  }
+}
+
+/**
+ * Store pagination state
+ */
+async function storePaginationState(senderId, type, pageIndex, confidence) {
+  global.paginationStates = global.paginationStates || {};
+  global.paginationStates[senderId] = {
+    type: type,
+    pageIndex: pageIndex,
+    confidence: confidence,
+    timestamp: Date.now()
+  };
+}
+
+/**
+ * Get pagination state
+ */
+async function getPaginationState(senderId, type) {
+  global.paginationStates = global.paginationStates || {};
+  const state = global.paginationStates[senderId];
+  
+  if (!state || state.type !== type) return null;
+  
+  // Clear expired states (older than 1 hour)
+  if (Date.now() - state.timestamp > 60 * 60 * 1000) {
+    delete global.paginationStates[senderId];
+    return null;
+  }
+  
+  return state;
+}
+
+/**
+ * Clear pagination state
+ */
+async function clearPaginationState(senderId) {
+  global.paginationStates = global.paginationStates || {};
+  delete global.paginationStates[senderId];
+}
+
 module.exports = {
   isNewUser,
   startOnboarding,
   handleOnboardingResponse,
   processOnboardingImage,
   handleDataConfirmation,
+  handleInventoryPagination,
   completeOnboarding,
   getOnboardingState,
   ONBOARDING_STATES

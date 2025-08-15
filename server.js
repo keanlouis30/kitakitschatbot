@@ -820,8 +820,13 @@ async function handleQuickReplyPayload(senderId, payload) {
       break;
       
     default:
+      // Handle onboarding pagination
+      if (payload.startsWith('ONBOARD_INVENTORY_PAGE_')) {
+        const pageIndex = parseInt(payload.replace('ONBOARD_INVENTORY_PAGE_', ''));
+        await onboardingModule.handleInventoryPagination(senderId, pageIndex);
+      }
       // Handle item selection for add stock, change price, or item sold
-      if (payload.startsWith('ADD_STOCK_')) {
+      else if (payload.startsWith('ADD_STOCK_')) {
         await handleAddStockSelected(senderId, payload.replace('ADD_STOCK_', ''));
       } else if (payload.startsWith('CHANGE_PRICE_')) {
         await handleChangePriceSelected(senderId, payload.replace('CHANGE_PRICE_', ''));
