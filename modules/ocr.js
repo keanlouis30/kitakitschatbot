@@ -4,6 +4,9 @@ const fs = require('fs').promises;
 const path = require('path');
 const crypto = require('crypto');
 
+// Import Gemini OCR module
+const geminiOCR = require('./gemini-ocr');
+
 // Temp directory for storing images
 const TEMP_DIR = path.join(__dirname, '..', 'temp');
 
@@ -46,11 +49,32 @@ async function downloadImage(imageUrl) {
 }
 
 /**
- * Extract text from image using Tesseract.js
+ * Extract text from image using the configured OCR provider (Gemini or Tesseract)
  */
 async function extractTextFromImage(imageUrl) {
+  const ocrProvider = process.env.OCR_PROVIDER || 'tesseract';
+  
+  console.log(`Using OCR provider: ${ocrProvider}`);
+  
+  if (ocrProvider === 'gemini' && process.env.GOOGLE_GEMINI_API_KEY) {
+    try {
+      return await geminiOCR.extractTextFromImage(imageUrl);
+    } catch (error) {
+      console.error('Gemini OCR failed, falling back to Tesseract:', error);
+      // Fall back to Tesseract if Gemini fails
+    }
+  }
+  
+  // Use Tesseract as default or fallback
+  return await extractTextFromImageTesseract(imageUrl);
+}
+
+/**
+ * Extract text from image using Tesseract.js (legacy/fallback method)
+ */
+async function extractTextFromImageTesseract(imageUrl) {
   try {
-    console.log('Starting OCR for image:', imageUrl);
+    console.log('Starting Tesseract OCR for image:', imageUrl);
     
     // Download image first (Facebook Messenger images require authentication)
     const localImagePath = await downloadImage(imageUrl);
@@ -75,21 +99,23 @@ async function extractTextFromImage(imageUrl) {
     const extractedText = result.data.text.trim();
     const confidence = result.data.confidence;
     
-    console.log(`OCR completed. Confidence: ${confidence}%`);
+    console.log(`Tesseract OCR completed. Confidence: ${confidence}%`);
     console.log('Extracted text:', extractedText);
     
     return {
       text: extractedText || 'No text detected in the image',
       confidence: confidence,
       words: result.data.words?.length || 0,
-      lines: result.data.lines?.length || 0
+      lines: result.data.lines?.length || 0,
+      provider: 'tesseract'
     };
   } catch (error) {
-    console.error('OCR Error:', error);
+    console.error('Tesseract OCR Error:', error);
     return {
       text: 'Error processing image. Please try again.',
       confidence: 0,
-      error: error.message
+      error: error.message,
+      provider: 'tesseract'
     };
   }
 }
@@ -135,9 +161,36 @@ async function extractTextWithLanguage(imageUrl, language = 'eng') {
 }
 
 /**
- * Process receipt or structured document
+ * Process receipt or structured document using smart OCR
  */
 async function processReceipt(imageUrl) {
+  const ocrProvider = process.env.OCR_PROVIDER || 'tesseract';
+  
+  if (ocrProvider === 'gemini' && process.env.GOOGLE_GEMINI_API_KEY) {
+    try {
+      // Use Gemini's smart sales extraction for receipts
+      const result = await geminiOCR.extractSalesFromImage(imageUrl);
+      if (result.success) {
+        return {
+          rawText: result.rawText,
+          confidence: 90, // Gemini generally has high confidence
+          items: result.transactions.map(t => ({
+            description: t.item,
+            amount: t.totalAmount,
+            quantity: t.quantity,
+            unitPrice: t.unitPrice
+          })),
+          total: result.totalSales,
+          date: result.date,
+          provider: 'gemini'
+        };
+      }
+    } catch (error) {
+      console.error('Gemini receipt processing failed, falling back to basic OCR:', error);
+    }
+  }
+  
+  // Fallback to basic OCR + simple parsing
   try {
     const ocrResult = await extractTextFromImage(imageUrl);
     const lines = ocrResult.text.split('\n').filter(line => line.trim());
@@ -148,13 +201,14 @@ async function processReceipt(imageUrl) {
       confidence: ocrResult.confidence,
       items: [],
       total: null,
-      date: null
+      date: null,
+      provider: ocrResult.provider || 'tesseract'
     };
     
     // Look for common patterns
     lines.forEach(line => {
       // Look for prices (simple regex for amounts)
-      const priceMatch = line.match(/\$?(\d+\.?\d*)/);
+      const priceMatch = line.match(/₱?(\d+\.?\d*)/);
       if (priceMatch) {
         const amount = parseFloat(priceMatch[1]);
         
@@ -182,9 +236,90 @@ async function processReceipt(imageUrl) {
     return {
       rawText: '',
       confidence: 0,
-      error: error.message
+      error: error.message,
+      provider: 'tesseract'
     };
   }
+}
+
+/**
+ * Extract inventory data from image (smart function)
+ */
+async function extractInventoryFromImage(imageUrl) {
+  const ocrProvider = process.env.OCR_PROVIDER || 'tesseract';
+  
+  if (ocrProvider === 'gemini' && process.env.GOOGLE_GEMINI_API_KEY) {
+    try {
+      return await geminiOCR.extractInventoryFromImage(imageUrl);
+    } catch (error) {
+      console.error('Gemini inventory extraction failed:', error);
+    }
+  }
+  
+  // Fallback to basic text extraction
+  const textResult = await extractTextFromImage(imageUrl);
+  return {
+    success: false,
+    items: [],
+    rawText: textResult.text,
+    error: 'Advanced inventory extraction not available without Gemini',
+    provider: textResult.provider || 'tesseract'
+  };
+}
+
+/**
+ * Extract sales data from image (smart function)
+ */
+async function extractSalesFromImage(imageUrl) {
+  const ocrProvider = process.env.OCR_PROVIDER || 'tesseract';
+  
+  if (ocrProvider === 'gemini' && process.env.GOOGLE_GEMINI_API_KEY) {
+    try {
+      return await geminiOCR.extractSalesFromImage(imageUrl);
+    } catch (error) {
+      console.error('Gemini sales extraction failed:', error);
+    }
+  }
+  
+  // Fallback to basic text extraction
+  const textResult = await extractTextFromImage(imageUrl);
+  return {
+    success: false,
+    transactions: [],
+    totalSales: 0,
+    date: null,
+    rawText: textResult.text,
+    error: 'Advanced sales extraction not available without Gemini',
+    provider: textResult.provider || 'tesseract'
+  };
+}
+
+/**
+ * Analyze document type and extract relevant data (smart function)
+ */
+async function analyzeDocument(imageUrl) {
+  const ocrProvider = process.env.OCR_PROVIDER || 'tesseract';
+  
+  if (ocrProvider === 'gemini' && process.env.GOOGLE_GEMINI_API_KEY) {
+    try {
+      return await geminiOCR.analyzeDocument(imageUrl);
+    } catch (error) {
+      console.error('Gemini document analysis failed:', error);
+    }
+  }
+  
+  // Fallback to basic text extraction
+  const textResult = await extractTextFromImage(imageUrl);
+  return {
+    success: false,
+    documentType: 'OTHER',
+    confidence: 'LOW',
+    extractedData: {
+      rawText: textResult.text
+    },
+    suggestions: ['Document analysis not available without Gemini. Please manually enter the data.'],
+    provider: textResult.provider || 'tesseract'
+  };
 }
 
 /**
@@ -242,5 +377,8 @@ module.exports = {
   extractTextWithLanguage,
   processReceipt,
   extractTextFromMultipleImages,
+  extractInventoryFromImage,
+  extractSalesFromImage,
+  analyzeDocument,
   cleanupTempFiles
 };

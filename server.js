@@ -6,6 +6,7 @@ const bodyParser = require('body-parser');
 const messengerModule = require('./modules/messenger');
 const databaseModule = require('./modules/database');
 const ocrModule = require('./modules/ocr');
+const onboardingModule = require('./modules/onboarding');
 const queryModule = require('./modules/query');
 const analyticsModule = require('./modules/analytics');
 
@@ -548,7 +549,13 @@ async function handleMessage(event) {
     
     // Handle image with OCR (receipts, invoices, inventory photos)
     if (message.attachments && message.attachments.length > 0 && message.attachments[0].type === 'image') {
-      await handleImageMessage(senderId, message.attachments[0].payload.url);
+      // Check if user is in onboarding process first
+      const isProcessed = await onboardingModule.processOnboardingImage(senderId, message.attachments[0].payload.url);
+      
+      if (!isProcessed) {
+        // Normal OCR processing if not in onboarding
+        await handleImageMessage(senderId, message.attachments[0].payload.url);
+      }
     }
     // Handle text messages and quick reply responses
     else if (message.text || message.quick_reply) {
@@ -691,8 +698,20 @@ async function handleQuickReplyPayload(senderId, payload) {
       await handleItemSold(senderId);
       break;
       
-    case 'READ_RECEIPT':
-      await handleReadReceipt(senderId);
+    case 'SCAN_DOCUMENT':
+      await handleScanDocument(senderId);
+      break;
+      
+    case 'SCAN_DOC_ADD_INVENTORY':
+      await handleScanDocAddInventory(senderId);
+      break;
+
+    case 'SCAN_DOC_SALES':
+      await handleScanDocSales(senderId);
+      break;
+
+    case 'SCAN_DOC_ONBOARD_ALL':
+      await handleScanDocOnboardAll(senderId);
       break;
       
     case 'SUMMARY':
@@ -782,9 +801,32 @@ async function handleQuickReplyPayload(senderId, payload) {
       await handleConsentRejection(senderId);
       break;
       
+    // ONBOARDING FLOW HANDLERS
+    case 'ONBOARD_INVENTORY':
+    case 'ONBOARD_SALES':
+    case 'ONBOARD_MANUAL':
+    case 'ONBOARD_HELP':
+      await onboardingModule.handleOnboardingResponse(senderId, payload);
+      break;
+      
+    case 'ONBOARD_CONFIRM_INVENTORY':
+    case 'ONBOARD_CONFIRM_SALES':
+    case 'ONBOARD_REVIEW_INVENTORY':
+    case 'ONBOARD_REVIEW_SALES':
+    case 'ONBOARD_RETRY_PHOTO':
+    case 'ONBOARD_SKIP':
+    case 'ONBOARD_COMPLETE':
+      await onboardingModule.handleDataConfirmation(senderId, payload);
+      break;
+      
     default:
+      // Handle onboarding pagination
+      if (payload.startsWith('ONBOARD_INVENTORY_PAGE_')) {
+        const pageIndex = parseInt(payload.replace('ONBOARD_INVENTORY_PAGE_', ''));
+        await onboardingModule.handleInventoryPagination(senderId, pageIndex);
+      }
       // Handle item selection for add stock, change price, or item sold
-      if (payload.startsWith('ADD_STOCK_')) {
+      else if (payload.startsWith('ADD_STOCK_')) {
         await handleAddStockSelected(senderId, payload.replace('ADD_STOCK_', ''));
       } else if (payload.startsWith('CHANGE_PRICE_')) {
         await handleChangePriceSelected(senderId, payload.replace('CHANGE_PRICE_', ''));
@@ -873,7 +915,7 @@ async function handleTextCommands(senderId, lowerText, originalText) {
 
 // Send consent notice (first step)
 async function sendConsentNotice(senderId) {
-  const consentText = `🏪 Welcome to KitaKits! \n\nBefore we can assist you with your inventory management needs, we need your consent to collect and process your data to provide our services.\n\n📋 **Data Collection Notice**\n\nWe collect and process your:\n• Messages and interactions\n• Inventory data you provide\n• Sales transaction records\n• OCR/image processing results\n\n🔒 Your data is used exclusively to:\n• Provide inventory management services\n• Generate business insights\n• Improve our chatbot functionality\n\n**Do you consent to data collection and processing?**`;
+  const consentText = `🏪 Welcome to Kitakita! \n\nBefore we can assist you with your inventory management needs, we need your consent to collect and process your data to provide our services.\n\n📋 **Data Collection Notice**\n\nWe collect and process your:\n• Messages and interactions\n• Inventory data you provide\n• Sales transaction records\n• OCR/image processing results\n\n🔒 Your data is used exclusively to:\n• Provide inventory management services\n• Generate business insights\n• Improve our chatbot functionality\n\n**Do you consent to data collection and processing?**`;
   
   await messengerModule.sendQuickReplies(senderId, consentText, [
     { title: '✅ Yes, I Consent', payload: 'CONSENT_YES' },
@@ -903,7 +945,7 @@ async function sendDataSharingPolicy(senderId) {
 
 // Send End User License Agreement (EULA)
 async function sendEULA(senderId) {
-  const eulaText = `📄 **End User License Agreement (EULA)**\n\n**License Grant:**\n• You are granted a limited, non-exclusive license to use KitaKits\n• This license is for personal/business inventory management only\n• The license is revocable at any time\n\n**User Responsibilities:**\n• Provide accurate inventory information\n• Use the service responsibly and legally\n• Do not attempt to harm or misuse the system\n• Respect other users and system resources\n\n**Service Limitations:**\n• KitaKits is provided "as is" without warranties\n• We are not liable for business decisions based on our reports\n• Service availability is not guaranteed 100% uptime\n\n**Termination:**\n• You may stop using the service at any time\n• We reserve the right to terminate accounts for misuse\n• Upon termination, your data will be deleted per our retention policy\n\n**Do you accept the End User License Agreement?**`;
+  const eulaText = `📄 **End User License Agreement (EULA)**\n\n**License Grant:**\n• You are granted a limited, non-exclusive license to use Kitakita\n• This license is for personal/business inventory management only\n• The license is revocable at any time\n\n**User Responsibilities:**\n• Provide accurate inventory information\n• Use the service responsibly and legally\n• Do not attempt to harm or misuse the system\n• Respect other users and system resources\n\n**Service Limitations:**\n• Kitakita is provided "as is" without warranties\n• We are not liable for business decisions based on our reports\n• Service availability is not guaranteed 100% uptime\n\n**Termination:**\n• You may stop using the service at any time\n• We reserve the right to terminate accounts for misuse\n• Upon termination, your data will be deleted per our retention policy\n\n**Do you accept the End User License Agreement?**`;
   
   await messengerModule.sendQuickReplies(senderId, eulaText, [
     { title: '✅ I Accept', payload: 'EULA_YES' },
@@ -913,10 +955,17 @@ async function sendEULA(senderId) {
 
 // Send completion message and proceed to main features
 async function completeConsentFlow(senderId) {
-  const completionText = `🎉 **Consent Process Complete!**\n\nThank you for agreeing to our policies. You now have full access to KitaKits features!\n\n🏪 **KitaKits** - Your Inventory Assistant\n\n📱 I can help you with:\n• 📦 Inventory tracking and management\n• 💰 Sales recording and reporting\n• 📊 Business analytics and insights\n• 📸 Receipt scanning and OCR\n\nLet's get started with managing your inventory!`;
+  const completionText = `🎉 **Consent Process Complete!**\n\nThank you for agreeing to our policies. You now have full access to Kitakita features!\n\n🏪 **Kitakita** - Your Inventory Assistant\n\n📱 I can help you with:\n• 📦 Inventory tracking and management\n• 💰 Sales recording and reporting\n• 📊 Business analytics and insights\n• 📸 Receipt scanning and OCR\n\nLet's get started with managing your inventory!`;
   
   await messengerModule.sendTextMessage(senderId, completionText);
-  await sendMainMenu(senderId);
+  
+  // Check if user is new and start onboarding
+  const isNew = await onboardingModule.isNewUser(senderId);
+  if (isNew) {
+    await onboardingModule.startOnboarding(senderId);
+  } else {
+    await sendMainMenu(senderId);
+  }
 }
 
 // Handle consent step progression
@@ -976,7 +1025,7 @@ async function handleConsentStep(senderId, consentType, accepted) {
 
 // Handle consent flow rejection
 async function handleConsentRejection(senderId) {
-  const rejectionText = `Thank you for your interest in KitaKits.\n\nSince you have not agreed to our data policies, we cannot provide our inventory management services at this time.\n\n🔒 Your privacy is important to us, and we respect your decision.\n\nIf you change your mind in the future, you can always restart the conversation by sending "hello" or "start".\n\nThank you for considering KitaKits!`;
+  const rejectionText = `Thank you for your interest in Kitakita.\n\nSince you have not agreed to our data policies, we cannot provide our inventory management services at this time.\n\n🔒 Your privacy is important to us, and we respect your decision.\n\nIf you change your mind in the future, you can always restart the conversation by sending "hello" or "start".\n\nThank you for considering Kitakita!`;
   
   await messengerModule.sendTextMessage(senderId, rejectionText);
 }
@@ -992,7 +1041,7 @@ async function sendWelcomeMessage(senderId) {
     
     if (userConsent && userConsent.all_policies_accepted) {
       // User has already completed consent, go directly to main menu
-      const welcomeText = `🏪 Welcome back to KitaKits! \n\nYour inventory assistant is ready to help you manage your sari-sari store, carinderia, or small business.\n\n📱 I can help you with:\n• 📦 Inventory tracking\n• 💰 Sales recording\n• 📊 Business insights\n• 📸 Receipt scanning\n\nWhat would you like to do today?`;
+      const welcomeText = `🏪 Welcome back to Kitakita! \n\nYour inventory assistant is ready to help you manage your sari-sari store, carinderia, or small business.\n\n📱 I can help you with:\n• 📦 Inventory tracking\n• 💰 Sales recording\n• 📊 Business insights\n• 📸 Receipt scanning\n\nWhat would you like to do today?`;
       
       await messengerModule.sendTextMessage(senderId, welcomeText);
       await sendMainMenu(senderId);
@@ -1026,7 +1075,7 @@ async function sendMainMenu(senderId) {
       { title: '💰 Change Item Price', payload: 'CHANGE_ITEM_PRICE' },
       { title: '📤 Item Sold', payload: 'ITEM_SOLD' },
       { title: '📊 Summary', payload: 'SUMMARY' },
-      { title: '🧾 Read Receipt', payload: 'READ_RECEIPT' }
+      { title: '📄 Scan Document', payload: 'SCAN_DOCUMENT' }
     ]);
     
   } catch (error) {
@@ -1038,7 +1087,7 @@ async function sendMainMenu(senderId) {
 
 // Send help message
 async function sendHelpMessage(senderId) {
-  const helpText = `❓ KitaKits Help - Mga Commands\n\n📦 INVENTORY:\n• "Add [item] [price] [qty]" - Magdagdag\n• "Stock [item]" - I-check ang stock\n\n💰 SALES:\n• "Sold [item] [qty]" - Record benta\n• "Daily sales" - Tingnan ang sales\n\n📸 IMAGES:\n• Mag-send ng receipt para sa auto-scan\n• Mag-send ng inventory photo\n\n🏪 QUICK ACTIONS:\nGamitin ang mga buttons sa baba para sa mabilis na aksyon!\n\n📞 Para sa tulong: I-type ang "menu"`;
+  const helpText = `❓ Kitakita Help - Mga Commands\n\n📦 INVENTORY:\n• "Add [item] [price] [qty]" - Magdagdag\n• "Stock [item]" - I-check ang stock\n\n💰 SALES:\n• "Sold [item] [qty]" - Record benta\n• "Daily sales" - Tingnan ang sales\n\n📸 IMAGES:\n• Mag-send ng receipt para sa auto-scan\n• Mag-send ng inventory photo\n\n🏪 QUICK ACTIONS:\nGamitin ang mga buttons sa baba para sa mabilis na aksyon!\n\n📞 Para sa tulong: I-type ang "menu"`;
   
   await messengerModule.sendTextMessage(senderId, helpText);
   await sendMainMenu(senderId);
@@ -1946,7 +1995,41 @@ async function handleSessionBasedNumericInput(senderId, session, numericValue) {
   return false;
 }
 
-// Handle Read Receipt (placeholder)
+// Handle Scan Document - provides options for document scanning
+async function handleScanDocument(senderId) {
+  try {
+    await messengerModule.sendQuickReplies(senderId, '📄 *Scan Document* - Ano ang nais mong gawin?', [
+      { title: '📦 Add Items to Inventory', payload: 'SCAN_DOC_ADD_INVENTORY' },
+      { title: '💰 Sales (e.g., [item] [quantity])', payload: 'SCAN_DOC_SALES' },
+      { title: '📋 Onboard All Existing Items', payload: 'SCAN_DOC_ONBOARD_ALL' },
+      { title: '🏠 Main Menu', payload: 'MAIN_MENU' }
+    ]);
+  } catch (error) {
+    console.error('Error showing Scan Document options:', error);
+    await messengerModule.sendTextMessage(senderId, 'May error sa pagpapakita ng options. Subukan ulit.');
+    await sendMainMenu(senderId);
+  }
+}
+
+// Handle Scan Document Add Inventory option
+async function handleScanDocAddInventory(senderId) {
+  // Start inventory upload onboarding step (reuse onboarding module)
+  await onboardingModule.setupInventoryUpload(senderId);
+}
+
+// Handle Scan Document Sales option
+async function handleScanDocSales(senderId) {
+  // Start sales upload onboarding step (reuse onboarding module)
+  await onboardingModule.setupSalesUpload(senderId);
+}
+
+// Handle Scan Document Onboard All option
+async function handleScanDocOnboardAll(senderId) {
+  // This will start the full onboarding process
+  await onboardingModule.startOnboarding(senderId);
+}
+
+// Handle Read Receipt (placeholder - deprecated)
 async function handleReadReceipt(senderId) {
   await messengerModule.sendTextMessage(senderId,
     '🧾 *Read Receipt*\n\n📸 Mag-send ng larawan ng receipt para ma-scan at ma-extract ang information.\n\nFeature coming soon! 🚧');
