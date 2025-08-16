@@ -915,7 +915,7 @@ async function handleTextCommands(senderId, lowerText, originalText) {
 
 // Send consent notice (first step)
 async function sendConsentNotice(senderId) {
-  const consentText = `🏪 Welcome to KitaKits! \n\nBefore we can assist you with your inventory management needs, we need your consent to collect and process your data to provide our services.\n\n📋 **Data Collection Notice**\n\nWe collect and process your:\n• Messages and interactions\n• Inventory data you provide\n• Sales transaction records\n• OCR/image processing results\n\n🔒 Your data is used exclusively to:\n• Provide inventory management services\n• Generate business insights\n• Improve our chatbot functionality\n\n**Do you consent to data collection and processing?**`;
+  const consentText = `🏪 Welcome to Kitakita! \n\nBefore we can assist you with your inventory management needs, we need your consent to collect and process your data to provide our services.\n\n📋 **Data Collection Notice**\n\nWe collect and process your:\n• Messages and interactions\n• Inventory data you provide\n• Sales transaction records\n• OCR/image processing results\n\n🔒 Your data is used exclusively to:\n• Provide inventory management services\n• Generate business insights\n• Improve our chatbot functionality\n\n**Do you consent to data collection and processing?**`;
   
   await messengerModule.sendQuickReplies(senderId, consentText, [
     { title: '✅ Yes, I Consent', payload: 'CONSENT_YES' },
@@ -945,7 +945,7 @@ async function sendDataSharingPolicy(senderId) {
 
 // Send End User License Agreement (EULA)
 async function sendEULA(senderId) {
-  const eulaText = `📄 **End User License Agreement (EULA)**\n\n**License Grant:**\n• You are granted a limited, non-exclusive license to use KitaKits\n• This license is for personal/business inventory management only\n• The license is revocable at any time\n\n**User Responsibilities:**\n• Provide accurate inventory information\n• Use the service responsibly and legally\n• Do not attempt to harm or misuse the system\n• Respect other users and system resources\n\n**Service Limitations:**\n• KitaKits is provided "as is" without warranties\n• We are not liable for business decisions based on our reports\n• Service availability is not guaranteed 100% uptime\n\n**Termination:**\n• You may stop using the service at any time\n• We reserve the right to terminate accounts for misuse\n• Upon termination, your data will be deleted per our retention policy\n\n**Do you accept the End User License Agreement?**`;
+  const eulaText = `📄 **End User License Agreement (EULA)**\n\n**License Grant:**\n• You are granted a limited, non-exclusive license to use Kitakita\n• This license is for personal/business inventory management only\n• The license is revocable at any time\n\n**User Responsibilities:**\n• Provide accurate inventory information\n• Use the service responsibly and legally\n• Do not attempt to harm or misuse the system\n• Respect other users and system resources\n\n**Service Limitations:**\n• Kitakita is provided "as is" without warranties\n• We are not liable for business decisions based on our reports\n• Service availability is not guaranteed 100% uptime\n\n**Termination:**\n• You may stop using the service at any time\n• We reserve the right to terminate accounts for misuse\n• Upon termination, your data will be deleted per our retention policy\n\n**Do you accept the End User License Agreement?**`;
   
   await messengerModule.sendQuickReplies(senderId, eulaText, [
     { title: '✅ I Accept', payload: 'EULA_YES' },
@@ -955,7 +955,7 @@ async function sendEULA(senderId) {
 
 // Send completion message and proceed to main features
 async function completeConsentFlow(senderId) {
-  const completionText = `🎉 **Consent Process Complete!**\n\nThank you for agreeing to our policies. You now have full access to KitaKits features!\n\n🏪 **KitaKits** - Your Inventory Assistant\n\n📱 I can help you with:\n• 📦 Inventory tracking and management\n• 💰 Sales recording and reporting\n• 📊 Business analytics and insights\n• 📸 Receipt scanning and OCR\n\nLet's get started with managing your inventory!`;
+  const completionText = `🎉 **Consent Process Complete!**\n\nThank you for agreeing to our policies. You now have full access to Kitakita features!\n\n🏪 **Kitakita** - Your Inventory Assistant\n\n📱 I can help you with:\n• 📦 Inventory tracking and management\n• 💰 Sales recording and reporting\n• 📊 Business analytics and insights\n• 📸 Receipt scanning and OCR\n\nLet's get started with managing your inventory!`;
   
   await messengerModule.sendTextMessage(senderId, completionText);
   
@@ -1025,7 +1025,7 @@ async function handleConsentStep(senderId, consentType, accepted) {
 
 // Handle consent flow rejection
 async function handleConsentRejection(senderId) {
-  const rejectionText = `Thank you for your interest in KitaKits.\n\nSince you have not agreed to our data policies, we cannot provide our inventory management services at this time.\n\n🔒 Your privacy is important to us, and we respect your decision.\n\nIf you change your mind in the future, you can always restart the conversation by sending "hello" or "start".\n\nThank you for considering KitaKits!`;
+  const rejectionText = `Thank you for your interest in Kitakita.\n\nSince you have not agreed to our data policies, we cannot provide our inventory management services at this time.\n\n🔒 Your privacy is important to us, and we respect your decision.\n\nIf you change your mind in the future, you can always restart the conversation by sending "hello" or "start".\n\nThank you for considering Kitakita!`;
   
   await messengerModule.sendTextMessage(senderId, rejectionText);
 }
@@ -1041,7 +1041,7 @@ async function sendWelcomeMessage(senderId) {
     
     if (userConsent && userConsent.all_policies_accepted) {
       // User has already completed consent, go directly to main menu
-      const welcomeText = `🏪 Welcome back to KitaKits! \n\nYour inventory assistant is ready to help you manage your sari-sari store, carinderia, or small business.\n\n📱 I can help you with:\n• 📦 Inventory tracking\n• 💰 Sales recording\n• 📊 Business insights\n• 📸 Receipt scanning\n\nWhat would you like to do today?`;
+      const welcomeText = `🏪 Welcome back to Kitakita! \n\nYour inventory assistant is ready to help you manage your sari-sari store, carinderia, or small business.\n\n📱 I can help you with:\n• 📦 Inventory tracking\n• 💰 Sales recording\n• 📊 Business insights\n• 📸 Receipt scanning\n\nWhat would you like to do today?`;
       
       await messengerModule.sendTextMessage(senderId, welcomeText);
       await sendMainMenu(senderId);
@@ -1087,7 +1087,7 @@ async function sendMainMenu(senderId) {
 
 // Send help message
 async function sendHelpMessage(senderId) {
-  const helpText = `❓ KitaKits Help - Mga Commands\n\n📦 INVENTORY:\n• "Add [item] [price] [qty]" - Magdagdag\n• "Stock [item]" - I-check ang stock\n\n💰 SALES:\n• "Sold [item] [qty]" - Record benta\n• "Daily sales" - Tingnan ang sales\n\n📸 IMAGES:\n• Mag-send ng receipt para sa auto-scan\n• Mag-send ng inventory photo\n\n🏪 QUICK ACTIONS:\nGamitin ang mga buttons sa baba para sa mabilis na aksyon!\n\n📞 Para sa tulong: I-type ang "menu"`;
+  const helpText = `❓ Kitakita Help - Mga Commands\n\n📦 INVENTORY:\n• "Add [item] [price] [qty]" - Magdagdag\n• "Stock [item]" - I-check ang stock\n\n💰 SALES:\n• "Sold [item] [qty]" - Record benta\n• "Daily sales" - Tingnan ang sales\n\n📸 IMAGES:\n• Mag-send ng receipt para sa auto-scan\n• Mag-send ng inventory photo\n\n🏪 QUICK ACTIONS:\nGamitin ang mga buttons sa baba para sa mabilis na aksyon!\n\n📞 Para sa tulong: I-type ang "menu"`;
   
   await messengerModule.sendTextMessage(senderId, helpText);
   await sendMainMenu(senderId);
